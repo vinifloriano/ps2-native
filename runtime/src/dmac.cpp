@@ -29,6 +29,9 @@ struct Channel {
 };
 
 Channel g_ch[10];
+// Quadwords channel 2 has moved since it last finished, for when its transfer would be over (finish, gif::path3_settle). Not in a
+// state: the settle event itself is in the machine's event list, and a count of 0 after a load only brings the next one sooner.
+std::uint64_t g_ch2_qwc = 0;
 std::uint32_t g_ctrl = 0, g_pcr = 0, g_sqwc = 0, g_rbsr = 0, g_rbor = 0, g_stadr = 0, g_enable = 0;
 
 constexpr std::uint32_t kBase[10] = {0x10008000u, 0x10009000u, 0x1000A000u, 0x1000B000u, 0x1000B400u,
@@ -97,7 +100,10 @@ void deliver(int ch, std::uint32_t address, std::uint32_t qwc) {
     switch (ch) {
     case 0: vif::transfer(0, data, qwc); break;
     case 1: vif::transfer(1, data, qwc); break;
-    case 2: gif::transfer(3, data, qwc); break;
+    case 2:
+        g_ch2_qwc += qwc;
+        gif::transfer(3, data, qwc);
+        break;
     case 9:
         for (std::uint32_t i = 0; i < qwc; ++i)
             std::memcpy(g_spr + ((g_ch[9].sadr + i * 16) & (kScratchpadSize - 1)), data + i * 16, 16);
@@ -134,6 +140,11 @@ void finish(int ch) {
     if (trace && ch <= 4) std::fprintf(stderr, "[dma] ch%d done chcr 0x%08X tadr 0x%08X madr 0x%08X\n", ch, c.chcr, c.tadr, c.madr);
     c.chcr &= ~0x100u;
     if (ch == 1) gif::vif1_idle();
+    if (ch == 2) {
+        // the GIF takes one quadword per bus cycle, two of the EE's: what of channel 2 still flows reaches the GS by then
+        schedule(gif::kEventPath3Settle, now() + 2u * g_ch2_qwc + 1u, gif::path3_settle);
+        g_ch2_qwc = 0;
+    }
     hw::dmac_raise(static_cast<unsigned>(ch));
     if (ch == 8 && g_mfifo_waiting && (g_ch[1].chcr & 0x100u) && !g_ch[1].paused) {
         g_mfifo_waiting = false;

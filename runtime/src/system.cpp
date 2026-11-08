@@ -499,6 +499,8 @@ std::function<void()> event_action(int id, std::uint64_t at) {
     if (id == hw::kEventVblank) return vblank;
     if (id == hw::kEventVblankEnd + 100) return [] { iop::vblank(false); };
     if (id == sif::kEventSifCommand) return sif::deliver_commands;
+    if (id == gif::kEventPath3Settle) return gif::path3_settle;
+    if (id == vif::kEventPath3Wait) return vif::path3_resume;
     if (id >= hw::kEventCount) return kernel::alarm_action(id - hw::kEventCount);
     return hw::event_action(id, at);
 }
@@ -932,6 +934,9 @@ void run_vu_thread() {
         const std::uint8_t *payload = nullptr;
         core_sample(Who::Vu);
         while (in.peek(h, payload)) {
+            // A VIF1 waiting at an empty MSKPATH3 window for channel 2 (vif.cpp) goes on before anything that shows the EE has moved
+            // on without starting channel 2; more VIF1 data, channel 2's own data (gif::transfer resumes it) and VIF1's idle do not.
+            if (h.type != gs::queue::kVif1 && h.type != gs::queue::kGif && h.type != gs::queue::kPath3Idle && h.type != gs::queue::kWrap) vif::path3_resume();
             switch (h.type) {
             case gs::queue::kVif1: vif::transfer_words(1, reinterpret_cast<const std::uint32_t *>(payload), h.arg0); break;
             case gs::queue::kVif1Write: vif::write(1, h.arg0, h.arg1); break;

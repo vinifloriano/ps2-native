@@ -7,6 +7,7 @@
 #include "vu_micro.hpp"
 
 #include "ps2/state.hpp"
+#include "ps2/system.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -41,6 +42,11 @@ std::uint8_t g_dry_run[16384];
 bool on_vu_thread() { return gs::queue::role() == gs::queue::Role::Vu; }
 bool shadow(int unit) { return unit == 1 && gs::queue::vu_active() && !on_vu_thread(); }
 Unit &state(int unit) { return unit == 1 && on_vu_thread() ? g_vu_side : g_units[unit]; }
+
+// VIF1 waiting at an empty MSKPATH3 window for channel 2 (execute, path3_resume): [0] the EE's unit, [1] the vector thread's copy.
+// Not in a state: after a load the unit just goes on past the window.
+bool g_path3_wait[2] = {};
+constexpr std::uint64_t kPath3WaitCycles = 1000;  // EE cycles a VIF1 alone (no vector thread) waits for channel 2 at most
 
 // The last 8 commands a unit decoded, for the log when a unit loses its place in the stream (a float or a vertex read as a command).
 // Three slots: VIF0, VIF1 and VIF1's copy on the VU thread. Not part of the save state. Per command the cost is three stores.
@@ -425,7 +431,23 @@ void execute(int unit, std::uint32_t cmd, const std::uint32_t *data, const Ctx &
     case 0x03: u.base = imm & 0x3FFu; break;
     case 0x04: u.itops = imm & 0x3FFu; break;
     case 0x05: u.mode = imm & 3u; break;
-    case 0x06: gif::set_path3_masked((imm >> 15) & 1u); break;
+    case 0x06: {
+        // A window (the mask dropped and raised again by the next command) lets the packet channel 2 has waiting through. On the
+        // console VIF1 is slow and the EE starts channel 2 while VIF1 is still near the top of its list, so by the first window the
+        // packet is there; here VIF1 runs as soon as channel 1 starts, so a window can come before the EE has started channel 2
+        // at all. Guitar Hero III starts channel 2 (the frame's textures) 22 cycles after channel 1 (the draws, with a window
+        // before each draw that needs the next texture); its whole list used to run in those 22 cycles, every window empty, and
+        // the textures all came after the draws. So an empty window holds VIF1 right there until channel 2's data comes (the end
+        // of gif::transfer), until something else shows that time went on (the vector thread's next message, see system.cpp), or
+        // for kPath3WaitCycles (without the vector thread). The dry run of the EE beside the vector thread does not wait.
+        const bool masked = (imm >> 15) & 1u;
+        gif::set_path3_masked(masked);
+        if (unit == 1 && !masked && !c.dry && gif::path3_should_wait()) {
+            g_path3_wait[c.vu_thread] = true;
+            if (!c.vu_thread) schedule(kEventPath3Wait, now() + kPath3WaitCycles, path3_resume);
+        }
+        break;
+    }
     case 0x07: u.mark = imm; u.stat |= kStatMrk; break;
     case 0x10: case 0x11: case 0x13: break;
     case 0x14: case 0x15: run_vu(unit, imm * 8u, c); break;
@@ -478,6 +500,9 @@ void decode(int unit, std::uint32_t cmd) {
     }
 }
 
+// Commands that send to the GIF (DIRECT, DIRECTHL, MSCAL, MSCALF, MSCNT: VU1's XGKICK) or wait for all of it (FLUSHA).
+bool uses_gif(std::uint32_t op) { return op == 0x50 || op == 0x51 || op == 0x14 || op == 0x15 || op == 0x17 || op == 0x13; }
+
 // `base` is the stream position of words[0], for the history.
 std::size_t run(int unit, const std::uint32_t *words, std::size_t count, std::uint64_t base) {
     const bool vu_thread = on_vu_thread();
@@ -486,12 +511,19 @@ std::size_t run(int unit, const std::uint32_t *words, std::size_t count, std::ui
     Unit &u = c.u;
     History &h = g_hist[side ? 2 : unit];
     std::size_t pos = 0;
-    while (pos < count && !u.stalled) {
+    while (pos < count && !u.stalled && !(unit == 1 && g_path3_wait[vu_thread])) {
         const std::uint32_t cmd = words[pos];
         const std::size_t start = pos + 1;
         const std::uint32_t need = data_words(cmd, u);
         if (start + need > count) {
             decode(unit, cmd);
+            break;
+        }
+        if (unit == 1 && !c.dry && uses_gif((cmd >> 24) & 0x7Fu) && gif::path3_starved()) {
+            // PATH3 is part way through a packet whose data channel 2 has not sent yet: the GIF stays with it until it ends, so
+            // VIF1 waits here before this command goes to the GIF, as at an empty window (execute, MSKPATH3).
+            g_path3_wait[vu_thread] = true;
+            if (!vu_thread) schedule(kEventPath3Wait, now() + kPath3WaitCycles, path3_resume);
             break;
         }
         h.last[h.head++ & 7u] = {cmd, need, base + pos};
@@ -511,15 +543,49 @@ void process(int unit) {
 
 void reset() {
     for (Unit &u : g_units) u = Unit{};
+    g_path3_wait[0] = false;
     for (History &h : g_hist) h = History{};
 }
 
 void reset_vu_side() {
     g_vu_side = Unit{};
+    g_path3_wait[1] = false;
     g_hist[2] = History{};
 }
 
 std::uint32_t itop(int unit) { return g_units[unit].itop; }
+
+bool path3_waiting() { return g_path3_wait[on_vu_thread()]; }
+
+// Whether VIF1 has a command that uses the GIF in the words it holds (the rest of its list behind a window).
+static bool gif_use_ahead(const Unit &u) {
+    for (std::size_t pos = 0; pos < u.pending.size();) {
+        const std::uint32_t cmd = u.pending[pos];
+        if (uses_gif((cmd >> 24) & 0x7Fu)) return true;
+        pos += 1 + data_words(cmd, u);
+    }
+    return false;
+}
+
+bool path3_window_is_last() {
+    const bool side = on_vu_thread();
+    // VIF1's DMA has ended and nothing after the window uses the GIF: there is nothing to keep in order behind it
+    while (g_path3_wait[side] && !gif_use_ahead(state(1))) {
+        g_path3_wait[side] = false;
+        process(1);
+    }
+    return !g_path3_wait[side];
+}
+
+void path3_resume() {
+    const bool side = on_vu_thread();
+    if (!g_path3_wait[side]) return;
+    g_path3_wait[side] = false;
+    process(1);
+    const Unit &u = state(1);
+    if (gif::vif1_idle_waiting()) path3_window_is_last();  // the DMA ended meanwhile: a last window is no window
+    if (u.pending.empty() && !u.stalled && !g_path3_wait[side]) gif::vif1_drained();
+}
 
 void stats() {
     for (int u = 0; u < 2; ++u) {
@@ -617,6 +683,7 @@ void write(int unit, std::uint32_t reg, std::uint32_t value) {
             fresh.ofst = u.ofst;
             fresh.tops = u.base;  // the double-buffer flag is clear again, so the next buffer is at BASE
             u = fresh;
+            if (unit == 1) g_path3_wait[on_vu_thread()] = false;
         }
         if (value & 8u) {
             u.stat &= ~0x3F00u;

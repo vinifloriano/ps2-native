@@ -229,6 +229,13 @@ if(NOT EMSCRIPTEN)
     if(WIN32)
         target_link_libraries(ps2sifunhandledtest PRIVATE synchronization)
     endif()
+    # VIF1 lets channel 2's PATH3 packets through its MSKPATH3 windows in order (Guitar Hero III's menus), no game needed: ninja ps2path3windowtest
+    add_executable(ps2path3windowtest EXCLUDE_FROM_ALL tests/vif1_path3_window.cpp)
+    target_include_directories(ps2path3windowtest PRIVATE runtime/src)
+    target_link_libraries(ps2path3windowtest PRIVATE ps2runtime)
+    if(WIN32)
+        target_link_libraries(ps2path3windowtest PRIVATE synchronization)
+    endif()
     # ENVX of an SPU2 voice keyed on a few samples ago is already rising (Guitar Hero III's film audio), no game needed: ninja ps2spu2envxtest
     add_executable(ps2spu2envxtest EXCLUDE_FROM_ALL tests/spu2_envx_keyon.cpp)
     target_include_directories(ps2spu2envxtest PRIVATE runtime/src)

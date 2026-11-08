@@ -1,5 +1,7 @@
 #include "gif.hpp"
 
+#include "../vif.hpp"
+
 #include "gs.hpp"
 #include "queue.hpp"
 
@@ -220,6 +222,7 @@ Path g_scan[4];
 // with VIF1's own.
 struct Held {
     bool masked = false, mid_packet = false, flowing = false;
+    bool idle_after_wait = false;  // VIF1's DMA ended while VIF1 still waited at a window (vif1_idle): idle once it drains
     std::uint64_t left = 0;
     bool eop = false;
     std::vector<std::uint8_t> data;
@@ -348,14 +351,24 @@ void transfer(int path, const std::uint8_t *data, std::uint32_t qwc) {
         out(path, data, qwc);
         return;
     }
+    // The packet under way goes on; with the mask down so does the next one, and the rest of channel 2 flows behind it. It is
+    // held rather than sent at once: on the console channel 2 takes time, and a VIF1 list started right after it raises the mask
+    // before the GIF has taken more than the packet in flight. Guitar Hero III starts channel 2 (every texture of the frame) just
+    // before channel 1 (the draws), which lowers the mask for one texture packet before each draw that needs it; sending the whole
+    // of channel 2 at once loaded every texture before the first draw, so draws that share GS memory (the font, the button
+    // prompts) all saw the last texture loaded there: no text, black boxes (docs/apple/gh3-bakeoff.md). What flows is let out by
+    // the next GIF traffic, by VIF1 going idle, or by the time channel 2 would have taken (dmac.cpp, path3_settle).
     if (h.data.empty() && (!h.masked || h.mid_packet)) {
         std::uint32_t done = 0;
-        while (done < qwc && (!h.masked || h.mid_packet)) done += packet_length(data + static_cast<std::size_t>(done) * 16, qwc - done);
+        do done += packet_length(data + static_cast<std::size_t>(done) * 16, qwc - done);
+        while (done < qwc && h.mid_packet);
         out(3, data, done);
         data += static_cast<std::size_t>(done) * 16;
         qwc -= done;
+        if (qwc && !h.masked) h.flowing = true;
     }
     h.data.insert(h.data.end(), data, data + static_cast<std::size_t>(qwc) * 16);
+    vif::path3_resume();  // a VIF1 that waited at an empty window for this data goes on (vif.cpp)
 }
 
 void scan_signals(int path, const std::uint8_t *data, std::uint32_t qwc) { scan(g_scan[path], data, qwc); }
@@ -396,9 +409,39 @@ void vif1_idle() {
         return;
     }
     Held &h = g_held;
+    // VIF1's DMA ended while VIF1 waits at a window for channel 2 with more of its list behind it: idle once it has worked through
+    // that (vif1_drained). A window with nothing after it is the end of the list, and VIF1 is idle now.
+    if (vif::path3_waiting() && !vif::path3_window_is_last()) {
+        h.idle_after_wait = true;
+        return;
+    }
     h.flowing = false;
     if (!h.masked) release(false);
 }
+
+bool vif1_idle_waiting() { return g_held.idle_after_wait; }
+
+void vif1_drained() {
+    Held &h = g_held;
+    if (!h.idle_after_wait) return;
+    h.idle_after_wait = false;
+    h.flowing = false;
+    if (!h.masked) release(false);
+}
+
+bool path3_should_wait() {
+    const Held &h = g_held;
+    return hold_here() && h.data.empty() && !h.mid_packet;
+}
+
+bool path3_starved() {
+    const Held &h = g_held;
+    return hold_here() && h.data.empty() && h.mid_packet;
+}
+
+// Channel 2's transfer would be over by now: whatever of it still flows (the mask down, held only so that a VIF1 list started
+// meanwhile could raise the mask first) reaches the GS, as when VIF1 goes idle.
+void path3_settle() { vif1_idle(); }
 
 void set_path3_masked(bool masked) {
     if (gs::queue::role() != gs::queue::Role::Vu) g_stat = (g_stat & ~2u) | (masked ? 2u : 0u);

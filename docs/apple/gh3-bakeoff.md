@@ -87,9 +87,31 @@ Fix (`runtime/src/iop/spu2.cpp`):
 
 Result: the Activision, RedOctane and Neversoft logo films play (1.45 million GIF path 3 image uploads where there were 2), followed by the opening film (`INTRO.PSS`).
 
+### Fixed: menus without text, black button prompts, holes in the banners (PATH3 texture order)
+
+The symptom is the same with the Metal GPU renderer and the software renderer (`PS2_GS=cpu`), so it is not a Metal bug. The trace (`PS2_TRACE_DRAWS`, `PS2_TRACE_PATH3`, `PS2_TRACE_DMA`) shows why:
+- Every frame the EE starts channel 1 (VIF1: the draws) and, **22 EE cycles later**, channel 2 (PATH3: every texture of the frame, CLUTs and 8-bit textures sent as PSMCT32).
+- VIF1's list masks PATH3 at its top. Before each draw that needs the next texture it opens a window (`MSKPATH3 0` then `MSKPATH3 1`), with `FLUSH`, `DIRECT`, `FLUSHA`, `FLUSHE` around it.
+- On the console VIF1 is slow, so channel 2's packets are waiting by the first window and each window lets exactly one through. The GIF stays with a PATH3 packet until it ends, so VIF1's next `DIRECT` waits for it.
+- Here VIF1 ran its whole list the moment channel 1 started. Every window was empty, and all the textures reached the GS after the frame's draws.
+- Textures that share GS memory (the font at `0x2BC0`, the button prompts) were then drawn with whatever was loaded there last, and failed the alpha test (`GREATER 0x20`) or came out black.
+
+Fix (`runtime/src/vif.cpp`, `runtime/src/gs/gif.cpp`, `runtime/src/dmac.cpp`):
+- **VIF1 waits** at an empty window, and before a command that uses the GIF (`DIRECT`, `DIRECTHL`, `MSCAL*`, `MSCNT`, `FLUSHA`) while PATH3 is part way through a packet whose data has not come yet.
+- **It goes on** when channel 2's data arrives, after 1,000 EE cycles without the vector thread, or before the vector thread's next message that shows the EE moved on (vblank, present, download, fence, reset).
+- A window with nothing after it that uses the GIF (the end of the list) does not wait once VIF1's DMA has ended.
+- **PATH3** with the mask down lets the packet in flight go and holds the rest of channel 2 as flowing. The next GIF traffic, VIF1 going idle, or the time channel 2 would have taken (2 EE cycles per quadword, a scheduler event) let it out.
+- The dry run of VIF1 on the EE beside the vector thread does not wait. Nothing new goes into a state.
+- New test `tests/vif1_path3_window.cpp` (`ninja ps2path3windowtest`, in CI).
+- ps2autotests 54/55 (including `dma/vif/mskpath3`) and the 11 unit tests pass.
+
+Result: the caution, memory card and save screens, the main menu (Career, Co-op, Quickplay, Multiplayer, Training, Options) and the "Press any button to rock" title render with their text, frames and button prompts. Checked with and without the vector thread.
+
 ### Open
-- Each frame the EE sends user command 3, which no IOP module registers. It is dropped as on the console (720 times), so it is probably a debug channel, but worth confirming.
-- Not yet checked: the title screen and menus after the opening film, a song, film sound quality (the voices start up to one batch late), and the guitar.
+- Each frame the EE sends user command 3, which no IOP module registers. It is dropped as on the console, so it is probably a debug channel, but worth confirming.
+- System SIF commands (RPC) still reach the IOP at once (see the SIF fix above).
+- Not yet checked: a song, film sound quality (the voices start up to one batch late) and the guitar.
+- The window title still says "ps2-native-recomp".
 
 ## Candidate B: HenryKun55/celosia → PS2Recomp (025e264, built locally for comparison only, GPL-3.0)
 

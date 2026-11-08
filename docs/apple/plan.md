@@ -206,7 +206,9 @@ Done on 2026-11-08 (details in [gh3-bakeoff.md](gh3-bakeoff.md)):
 
 7. ~~Black intro film~~: MSTREAM stopped the film's second audio voice because ENVX read 0 right after KEY ON. ENVX now follows the attack from the KEY ON ([gh3-bakeoff.md](gh3-bakeoff.md)). The logo films and the opening film play.
 
+8. ~~Menus without text~~: VIF1 now waits at MSKPATH3 windows for channel 2, so textures reach the GS in order with the draws ([gh3-bakeoff.md](gh3-bakeoff.md)). The caution, save, title and main menus render.
+
 Next:
-1. Get from the opening film to the title screen and menus, then into a song.
+1. Play a song: Quickplay, the highway, note timing against the audio, and the guitar.
 2. Record PCSX2 (Rosetta) reference captures of boot, menu and the start of one song, to diff against the SIF traffic.
 3. Feed the harvested names into the translator's symbol output and the debugger.
