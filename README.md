@@ -5,6 +5,8 @@
 > (PS2, SLUS-216.72)**. Fixes stay generic so they help every game and can go back upstream.
 > The plan: [docs/apple/plan.md](docs/apple/plan.md). Where it stands: [docs/apple/gh3-bakeoff.md](docs/apple/gh3-bakeoff.md).
 > On macOS: `brew install cmake ninja pkg-config sdl2 ffmpeg ccache bash`, then `bash scripts/port.sh <name> <disc.iso> --native-only`.
+> To get a double-click app in /Applications: `bash scripts/mac_app.sh <name> --title "My Game" [--icon icon.png]`
+> (saves and logs go to `~/Library/Application Support/ps2-native/<name>`).
 > No game data, disc images or generated code are in this repository. Bring your own disc.
 >
 > The upstream README follows.
