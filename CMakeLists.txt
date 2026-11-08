@@ -229,6 +229,13 @@ if(NOT EMSCRIPTEN)
     if(WIN32)
         target_link_libraries(ps2sifunhandledtest PRIVATE synchronization)
     endif()
+    # an EE command packet for a guest IOP handler arrives when its SIF DMA is over (Guitar Hero III), no game needed: ninja ps2sifusercmdtest
+    add_executable(ps2sifusercmdtest EXCLUDE_FROM_ALL tests/sif_user_cmd_timing.cpp)
+    target_include_directories(ps2sifusercmdtest PRIVATE runtime/src)
+    target_link_libraries(ps2sifusercmdtest PRIVATE ps2runtime)
+    if(WIN32)
+        target_link_libraries(ps2sifusercmdtest PRIVATE synchronization)
+    endif()
     # an IOP sceSifSetDma with SIF_DMA_INT_O raises the EE's SIF0 interrupt, channel 5 (public report 71, no game needed): ninja ps2sifdmatest
     add_executable(ps2sifdmatest EXCLUDE_FROM_ALL tests/sif_dma_intr.cpp)
     target_include_directories(ps2sifdmatest PRIVATE runtime/src)

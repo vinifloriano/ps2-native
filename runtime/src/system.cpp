@@ -493,11 +493,12 @@ std::uint32_t video_options() { return g_video_options.load(std::memory_order_re
 namespace {
 
 constexpr char kStateMagic[8] = {'P', 'S', '2', 'S', 'T', 'A', 'T', 'E'};
-constexpr std::uint32_t kStateVersion = 9;
+constexpr std::uint32_t kStateVersion = 10;
 
 std::function<void()> event_action(int id, std::uint64_t at) {
     if (id == hw::kEventVblank) return vblank;
     if (id == hw::kEventVblankEnd + 100) return [] { iop::vblank(false); };
+    if (id == sif::kEventSifCommand) return sif::deliver_commands;
     if (id >= hw::kEventCount) return kernel::alarm_action(id - hw::kEventCount);
     return hw::event_action(id, at);
 }
@@ -522,8 +523,9 @@ void machine_state(state::Stream &s) {
     // of the IOP (sceCdSt*, where it is and whether it runs), so a state saved while a film or a music stream plays goes on streaming;
     // 7 adds the SIF RPC endpoints kept per server (guest servers, their order) and the IOP-to-EE request packet ring (SIF RPC rework, PR #27);
     // 8 adds the IOP's low-level hardware timers (AllocHardTimer, SetTimerCompare, SetTimerMode) that raise an interrupt;
-    // 9 adds the count of GS FINISH events that wait until the game has cleared CSR.FINISH.
-    if (version != kStateVersion && !(s.loading() && (version >= 4 && version <= 8))) throw std::runtime_error("state file from another version");
+    // 9 adds the count of GS FINISH events that wait until the game has cleared CSR.FINISH;
+    // 10 adds the EE command packets for guest IOP handlers whose SIF DMA is not over yet (sif::set_dma).
+    if (version != kStateVersion && !(s.loading() && (version >= 4 && version <= 9))) throw std::runtime_error("state file from another version");
     s.set_version(version);
     s.tag("ee");
     s.pod(g_cpu);

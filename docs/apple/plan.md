@@ -202,7 +202,9 @@ Done on 2026-11-08 (details in [gh3-bakeoff.md](gh3-bakeoff.md)):
 4. ~~CFunc name harvest~~: `scripts/harvest_cfuncs.py`, 871 names.
 5. ~~`-ffp-contract=off` on every build~~ (`scripts/cxx.sh`).
 
+6. ~~Async-file stall~~: a SIF timing race. EE→IOP user command packets now arrive when their DMA is over ([gh3-bakeoff.md](gh3-bakeoff.md)). GH3 loads and reaches the intro film.
+
 Next:
-1. Root-cause the async-file stall. Leads in [gh3-bakeoff.md](gh3-bakeoff.md): missing `cdvdman #50 sceCdSC` used by `CDVDSTM`, and FILEIO's reply data.
+1. The intro film (`ATVI.PSS`) decodes but stays black (see [gh3-bakeoff.md](gh3-bakeoff.md), "Next blocker").
 2. Record PCSX2 (Rosetta) reference captures of boot, menu and the start of one song, to diff against the SIF traffic.
 3. Feed the harvested names into the translator's symbol output and the debugger.

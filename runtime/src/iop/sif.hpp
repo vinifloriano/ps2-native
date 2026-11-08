@@ -20,6 +20,10 @@ std::uint32_t set_dma(std::uint32_t transfers, std::uint32_t count);
 int dma_stat(std::uint32_t id);
 void packet_processed();
 void pump();
+// The event that hands EE command packets for guest IOP handlers over when their DMA is over (set_dma). A negative id: alarm
+// events are numbered from hw::kEventCount up, so a new hw::Event would renumber the alarms of saved states.
+constexpr int kEventSifCommand = -2;
+void deliver_commands();
 void dump();
 // How many SIF commands with this id came from the EE with no IOP handler for them this run (dropped, as the console does).
 std::uint64_t unhandled_commands(std::uint32_t cid);

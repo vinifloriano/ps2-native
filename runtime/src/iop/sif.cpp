@@ -231,6 +231,19 @@ std::map<int, std::uint32_t> g_exec_return;
 std::uint32_t g_next_handle = 0;
 std::uint32_t g_iop_dma_id = 1, g_ee_dma_id = 1;
 std::uint64_t g_ee_dma_done = 0;
+// EE command packets for a handler of the game's own IOP modules (cid below 0x80000000, sceSifAddCmdHandler on the IOP) wait here
+// until the EE's DMA that carries them is over: the console's IOP sees a packet only when its SIF1 transfer has ended, by which time
+// sceSifDmaStat on the EE says done. Handing the packet over at once let an IOP module answer while the EE still waited on that
+// DmaStat: Guitar Hero III's async file layer (EE 0x120a40) reads its request id back from a slot the answer had already cleared,
+// opened its file with id -1 and waited forever on the read that followed (docs/apple/gh3-bakeoff.md). The runtime's own system
+// commands (RPC, bind, SREG) are still taken at once.
+struct PendingCommand {
+    std::uint64_t due = 0;
+    std::uint32_t src = 0;
+    std::vector<std::uint8_t> bytes;
+};
+std::deque<PendingCommand> g_pending_commands;
+constexpr std::uint32_t kCommandSnapshot = 0x400u;  // what a user handler gets in the IOP's command buffer (see command_packet)
 
 template <typename T>
 T ee_read(std::uint32_t a) {
@@ -409,8 +422,8 @@ void other_data(const std::uint8_t *packet) {
     send(&r, sizeof r);
 }
 
-void command(std::uint32_t src, std::uint32_t size) {
-    const std::uint8_t *packet = g_ram + (src & (kRamSize - 1));
+// `packet` is the EE's packet (at `src` in EE memory, or a copy of it taken when its DMA started), `size` its length.
+void command_packet(const std::uint8_t *packet, std::uint32_t size, std::uint32_t src) {
     const auto *h = reinterpret_cast<const Header *>(packet);
     if (g_options.trace_iop_modules) {
         std::uint32_t words[14];
@@ -501,11 +514,17 @@ void command(std::uint32_t src, std::uint32_t size) {
             }
             break;
         }
-        std::memcpy(iop::ram_ptr(kCmdBuffer), packet, std::min<std::uint32_t>(size, 0x400u));
+        std::memcpy(iop::ram_ptr(kCmdBuffer), packet, std::min<std::uint32_t>(size, kCommandSnapshot));
         iop::kernel::call_guest(it->second.handler, kCmdBuffer, it->second.data);
         break;
     }
     }
+}
+
+void command(std::uint32_t src, std::uint32_t size) { command_packet(g_ram + (src & (kRamSize - 1)), size, src); }
+
+void schedule_commands() {
+    if (!g_pending_commands.empty()) schedule(kEventSifCommand, g_pending_commands.front().due, deliver_commands);
 }
 
 bool g_fileio_async = false;
@@ -1250,6 +1269,7 @@ void reset() {
     std::memset(g_sreg, 0, sizeof g_sreg);
     g_iop_dma_id = g_ee_dma_id = 1;
     g_ee_dma_done = 0;
+    g_pending_commands.clear();
     g_iop_rpc_id = 1;
     g_iop_rpc_packets = 0;
     g_iop_rpc_next_packet = 0;
@@ -1276,9 +1296,20 @@ void set_reg(std::uint32_t reg, std::uint32_t value) {
     else if (reg == 3) g_msflag |= value;
 }
 
+void deliver_commands() {
+    const std::uint64_t t = now();
+    while (!g_pending_commands.empty() && g_pending_commands.front().due <= t) {
+        const PendingCommand c = std::move(g_pending_commands.front());
+        g_pending_commands.pop_front();
+        command_packet(c.bytes.data(), static_cast<std::uint32_t>(c.bytes.size()), c.src);
+    }
+    schedule_commands();
+}
+
 std::uint32_t set_dma(std::uint32_t transfers, std::uint32_t count) {
     if (!count) count = 1;
     std::uint64_t bytes = 0;
+    std::vector<PendingCommand> later;
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t base = transfers + i * 16;
         const std::uint32_t src = ee_read<std::uint32_t>(base) & (kRamSize - 1);
@@ -1287,6 +1318,15 @@ std::uint32_t set_dma(std::uint32_t transfers, std::uint32_t count) {
         bytes += size;
         if (dst == kRpcRecvAddr) g_data_addr = src;
         else if (dst == 0) reboot(src);
+        else if (dst == kCmdBuffer && size >= sizeof(Header) && !(ee_read<std::uint32_t>(src + 8) & 0x80000000u)) {
+            // A packet for a guest handler: copied now (the EE may reuse its buffer once DmaStat says done), handed over at the end
+            // of the transfer. At least 64 bytes, so the trace in command_packet reads inside the copy.
+            PendingCommand c;
+            c.src = src;
+            c.bytes.assign(std::max<std::uint32_t>(64u, std::min(size, kCommandSnapshot)), 0);
+            std::memcpy(c.bytes.data(), g_ram + src, std::min<std::uint32_t>({size, kCommandSnapshot, kRamSize - src}));
+            later.push_back(std::move(c));
+        }
         else if (dst == kCmdBuffer) command(src, size);
         else {
             iop::watch_copy("EE DMA (sceSifSetDma)", dst, src, size, 0);
@@ -1302,6 +1342,13 @@ std::uint32_t set_dma(std::uint32_t transfers, std::uint32_t count) {
         }
     }
     g_ee_dma_done = std::max(g_ee_dma_done, now()) + 256u + bytes * 2u;
+    if (!later.empty()) {
+        for (PendingCommand &c : later) {
+            c.due = g_ee_dma_done;
+            g_pending_commands.push_back(std::move(c));
+        }
+        schedule_commands();
+    }
     return g_ee_dma_id++;
 }
 
@@ -1529,6 +1576,16 @@ void state(ps2::state::Stream &s) {
     // waiting, and a load into a running program must not keep the replies of the time before the load.
     if (s.version() >= 5) s.deque(g_hle_replies, [&s](Call &c) { s.pod(c); });
     else if (s.loading()) g_hle_replies.clear();
+    // Command packets for guest IOP handlers whose DMA was not over yet (version 10). Their event is in the machine's event list.
+    if (s.version() >= 10) {
+        s.deque(g_pending_commands, [&s](PendingCommand &c) {
+            s.pod(c.due);
+            s.pod(c.src);
+            s.vec(c.bytes);
+        });
+    } else if (s.loading()) {
+        g_pending_commands.clear();
+    }
 }
 
 }

@@ -40,6 +40,39 @@ Date: 2026-11-08. Machine: Apple M5 Pro (15 cores, 24 GB), macOS 27.0.1, Apple c
   `build/native-gh3/ps2run --disc games/gh3/disc.iso --game-dir games/gh3 --frames 900 --trace-syscalls --trace-threads --no-record`
   plus `--trace-io --trace-iop-hle`.
 
+### Fixed: the async-file stall was a SIF timing race (2026-11-08)
+
+How Neversoft's file layer works, from the GH3 ELF and `FILEIO.IRX`:
+- The EE sends 0x70-byte requests with user SIF command 1, carrying the request id in the header `opt` word. The send function is `0x120a40`.
+- The send function waits for `sceSifDmaStat` to say done (`0x120bc0`), then returns `slot->id`.
+- An async open (`0x120180`) stores `0x80000000 | id` as the file's fd placeholder (`obj+0x48`). The completion (`0x11f5c0`, kind 1) replaces it with the real fd.
+- On the IOP, FILEIO resolves a placeholder fd through its fd table (`+0x2c` = the open's id). A read whose fd matches nothing stays in its wait queue forever.
+
+The race:
+- The runtime handed EE command packets to the IOP handler **inside** `sceSifSetDma`, and let the IOP catch up 64 cycles later. The EE's own DMA counted as busy for `256 + 2·bytes` cycles.
+- So FILEIO answered the open while the EE still spun on DmaStat.
+- The EE's command-1 handler (`0x1207a0`) had already cleared the request slot (id → -1) when the send function read the id back.
+- The open stored fd `0x80000000 | -1 = 0xFFFFFFFF`, overwriting the real fd 0 that the completion had just written.
+- The read that followed carried fd -1, FILEIO parked it forever, and the EE spun in `0x11DAB0` with `pending = 1`.
+- Found with `PS2_WATCH=0x58d480,0x10` (the file object's pending count and fd) and the end-of-run RAM dump (EE at 0, IOP at 0x2000000).
+
+Fix (`runtime/src/iop/sif.cpp`):
+- EE packets for **guest** IOP handlers (cid < 0x80000000) are copied when the transfer starts and handed over by a scheduler event at the end of that transfer. That matches the console, where the IOP's SIF1 interrupt comes when the DMA ends.
+- System commands (RPC, bind, SREG), which the runtime answers itself, are unchanged. **Open:** they also arrive early, so check whether any game depends on that before changing them too.
+- The pending packets are saved in quick-saves (state version 10, 4–9 still load).
+- New test `tests/sif_user_cmd_timing.cpp` (`ninja ps2sifusercmdtest`, run in CI).
+- ps2autotests 54/55 and the disc-free unit tests still pass.
+
+Result: GH3 now loads through the Brazucas splash with its progress bar, finishes loading and starts the Activision logo film (`MOVIES\ATVI.PSS`): 2,035 GS primitives where before there was 1.
+
+### Next blocker: the intro film stays black
+
+- `ATVI.PSS` is opened and the IPU decodes it (IDEC/BDEC commands in the thousands, about 197k qwords out through DMA channel 3).
+- But nothing new is drawn: GIF path 3 carries only 2 image transfers in 3,600 frames, and the frames after 1,200 are black.
+- The EE main thread waits at `0x11ED80`, under `StartPreLoadedMovie` (`0x250898`) on its stack.
+- Each frame the EE also sends user command 3, which no IOP module registers. It is dropped as on the console (720 times), so it is probably a debug channel, but worth confirming.
+- Next: follow the decoded frames from IPU out (channel 3) to the GS upload, and find out what `0x11ED80` waits for (film audio through `MSTREAM`, or the IPU's end-of-picture).
+
 ## Candidate B: HenryKun55/celosia → PS2Recomp (025e264, built locally for comparison only, GPL-3.0)
 
 - `ps2_analyzer` (enabled; celosia's own CLI turns it off) on `SLUS_216.72` in 1 s: 94 SDK functions bound to runtime handlers (`scePad2*`, `sceSif*`, `sceCd*` and others), 332 SDK functions without handlers, 0 jump tables detected.
