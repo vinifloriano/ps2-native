@@ -1,3 +1,14 @@
+# ps2-native
+
+> **This fork** of [exoteric33/ps2-native-recomp](https://github.com/exoteric33/ps2-native-recomp) (MIT, history kept)
+> aims at **Apple Silicon and Metal** (macOS arm64 first, iOS/iPadOS later). Its first target game is **Guitar Hero III
+> (PS2, SLUS-216.72)**. Fixes stay generic so they help every game and can go back upstream.
+> The plan: [docs/apple/plan.md](docs/apple/plan.md). Where it stands: [docs/apple/gh3-bakeoff.md](docs/apple/gh3-bakeoff.md).
+> On macOS: `brew install cmake ninja pkg-config sdl2 ffmpeg ccache bash`, then `bash scripts/port.sh <name> <disc.iso> --native-only`.
+> No game data, disc images or generated code are in this repository. Bring your own disc.
+>
+> The upstream README follows.
+
 # ps2-native-recomp
 
 Turns a PS2 game disc you own into a native Windows or Linux program by static recompilation: the code of the PS2's

@@ -86,9 +86,12 @@ if [ "${cxx_tools:-0}" != 1 ]; then
         cxx_avx2_msg="avx2: off (this PC or compiler has none)"
       fi ;;
   esac
-  case " ${CXXFLAGS:-} " in
+  # Every build, not only AVX2 ones: clang's default is -ffp-contract=on, which may fuse a*b+c written in one expression
+  # on any target with FMA, and arm64 always has it (Apple Silicon, Linux on ARM). The PS2's FPU and VU never fuse, so a
+  # fused result can differ in the last bit. A user's own -ffp-contract in $CXXFLAGS wins.
+  case " ${CXXFLAGS:-} $cxx_extra " in
     *" -ffp-contract"*) ;;
-    *" -march="*|*" -mfma"*|*" -mcpu="*) [ -n "$cxx_extra" ] || cxx_extra="-ffp-contract=off" ;;
+    *) cxx_extra="${cxx_extra:+$cxx_extra }-ffp-contract=off" ;;
   esac
   if [ "${cxx_avx2_said:-}" != 1 ]; then echo "$cxx_avx2_msg"; cxx_avx2_said=1; fi
 fi
