@@ -45,7 +45,17 @@ Date: 2026-11-08. Machine: Apple M5 Pro (15 cores, 24 GB), macOS 27.0.1, Apple c
 - `ps2_analyzer` (enabled; celosia's own CLI turns it off) on `SLUS_216.72` in 1 s: 94 SDK functions bound to runtime handlers (`scePad2*`, `sceSif*`, `sceCd*` and others), 332 SDK functions without handlers, 0 jump tables detected.
 - `ps2_recomp` in 2 s: **~9,460 functions**, 114 MB of C++. Unresolved `JR/JALR` sites were promoted to fallback entries (largest: `sub_002CAA68` with 614 entries).
 - celosia's `celosia` CLI is SotC-specific: the XFF capture/link stages and hard-coded stub addresses in `game/scus.toml`. For GH3 only the generic parts apply: analyzer → recomp → `ps2EntryRunner` built with `PS2X_RUNNER_DIRS`.
-- Build and run results: *see below*.
+- Build: HEAD 025e264 does not compile on macOS. `native_renderer_gl.cpp` uses `quadPrograms` and `regionPrograms` outside their `#if defined(PS2X_NATIVE_VITA)` block. With a one-line local patch (declare them on every platform) `ps2EntryRunner` builds in 34 s (46 MB, unity build).
+- Run (`SOTC_NATIVE=0`, emulated GS on its Metal GPU rasterizer; raylib window, miniaudio on Core Audio): **black screen**. All 12 screenshots over 60 s are the same empty frame.
+- Why it gets less far than candidate A:
+  - The runtime passes a host path as the guest's argv[0], so GH3 decides it runs from `host0:`. It never reboots the IOP with `IOPRP300.IMG` and asks for `host0:IOPModules/*.IRX`. PS2Recomp does not resolve those to the disc's `IOP/` folder (a symlink in the working directory is not enough).
+  - The modules fall back to the built-in HLE providers (`SIO2MAN SIO2D DBCMAN LIBSD FILEIO`). `MC2_D`, `DS2U_D` and `CDVDSTM` get no provider, and `MSTREAM` is never reached.
+  - The HLE `FILEIO` is Sony's protocol, not Neversoft's custom one, so the game's first file command (`sceSifSendCmd cid=0x1`, 0x70-byte packet) is never answered.
+- Lesson for this fork (it already does this): give the guest `cdrom0:\<BOOT2>;1` as argv[0] and run the disc's own IRX modules. GH3's Neversoft modules (`FILEIO`, `MSTREAM`) have no SDK equivalent to HLE.
+
+## Verdict
+
+**Base = ps2-native-recomp** (this fork). It builds and passes the tests on arm64 unchanged, runs GH3's real IOP modules, and gets further into the boot. PS2Recomp/celosia is GPL-3.0 and stays a reference for ideas only: the native renderer at the game's draw calls, difftest and the frame recorder.
 
 ## Function names
 
