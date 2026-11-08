@@ -204,7 +204,9 @@ Done on 2026-11-08 (details in [gh3-bakeoff.md](gh3-bakeoff.md)):
 
 6. ~~Async-file stall~~: a SIF timing race. EE→IOP user command packets now arrive when their DMA is over ([gh3-bakeoff.md](gh3-bakeoff.md)). GH3 loads and reaches the intro film.
 
+7. ~~Black intro film~~: MSTREAM stopped the film's second audio voice because ENVX read 0 right after KEY ON. ENVX now follows the attack from the KEY ON ([gh3-bakeoff.md](gh3-bakeoff.md)). The logo films and the opening film play.
+
 Next:
-1. The intro film (`ATVI.PSS`) decodes but stays black (see [gh3-bakeoff.md](gh3-bakeoff.md), "Next blocker").
+1. Get from the opening film to the title screen and menus, then into a song.
 2. Record PCSX2 (Rosetta) reference captures of boot, menu and the start of one song, to diff against the SIF traffic.
 3. Feed the harvested names into the translator's symbol output and the debugger.

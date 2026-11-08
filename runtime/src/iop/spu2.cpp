@@ -85,6 +85,9 @@ struct Core {
 
 std::vector<std::uint16_t> g_ram(kRamWords);
 Core g_cores[2];
+// When each voice was last keyed on, in IOP cycles, for ENVX read before the next batch starts the voice (attack_so_far). Not part of
+// a state (Voice is stored as it is): after a load a pending KON counts as a batch old, which only means a fuller attack level.
+std::uint64_t g_key_on_at[2][24] = {};
 bool g_block_end[2][24][2];
 
 bool *block_end(const Voice &v) {
@@ -524,6 +527,20 @@ void keep_ticking() {
 std::uint32_t set_hi(std::uint32_t address, std::uint32_t v) { return ((v & 0xFu) << 16) | (address & 0xFFFFu); }
 std::uint32_t set_lo(std::uint32_t address, std::uint32_t v) { return (address & 0xF0000u) | (v & 0xFFFFu); }
 
+// ENVX of a voice keyed on since the last batch. The console starts the attack at the sample after KON, so ENVX read a few samples
+// later is already rising; here the voice starts at the next batch (up to kBatch samples later) and until then ENVX would still show
+// the level of before the KON, 0 for a voice that was off. The level is worked out from the samples since the KON instead (the next
+// batch starts the attack itself, as before). Guitar Hero III's MSTREAM.IRX reads ENVX right after it keys a stream's voice on and
+// stops the stream when it reads 0: the second voice of the intro film's stereo pair was stopped that way, and the film never
+// started (docs/apple/gh3-bakeoff.md).
+std::int32_t attack_so_far(const Voice &v, std::uint64_t keyed_at) {
+    const std::uint64_t now = kernel::now();
+    const std::uint64_t samples = std::min<std::uint64_t>(now > keyed_at ? (now - keyed_at) / kCyclesPerSample : 0, kBatch);
+    Envelope e;
+    for (std::uint64_t n = 0; n < samples && e.level < 0x7FFF; ++n) e.step((v.adsr1 >> 8) & 0x7F, false, v.adsr1 & 0x8000u);
+    return e.level;
+}
+
 std::uint32_t read_voice(Core &k, std::uint32_t off) {
     if (off < 0x180u) {
         const Voice &v = k.voices[off >> 4];
@@ -533,7 +550,9 @@ std::uint32_t read_voice(Core &k, std::uint32_t off) {
         case 0x4: return v.pitch;
         case 0x6: return v.adsr1;
         case 0x8: return v.adsr2;
-        case 0xA: return static_cast<std::uint32_t>(v.env.level);
+        case 0xA:
+            if (v.key_on) return static_cast<std::uint32_t>(attack_so_far(v, g_key_on_at[&k == &g_cores[1]][off >> 4]));
+            return static_cast<std::uint32_t>(v.env.level);
         case 0xC: return static_cast<std::uint32_t>(v.vol[0].level);
         default: return static_cast<std::uint32_t>(v.vol[1].level);
         }
@@ -594,7 +613,10 @@ void key(Core &k, std::uint32_t mask, bool on) {
     for (int i = 0; i < 24; ++i) {
         if (!(mask & (1u << i))) continue;
         Voice &v = k.voices[i];
-        if (on) v.key_on = true;
+        if (on) {
+            v.key_on = true;
+            g_key_on_at[&k == &g_cores[1]][i] = kernel::now();
+        }
         else if (v.key_on) v.key_on = false;
         else if (v.phase != kOff) v.phase = kRelease;
     }
@@ -714,6 +736,7 @@ void reset() {
     kernel::register_job(kernel::kJobSpuTick, [](const kernel::Job &) { tick(); });
     std::fill(g_ram.begin(), g_ram.end(), 0);
     for (Core &k : g_cores) k = Core{};
+    std::memset(g_key_on_at, 0, sizeof g_key_on_at);
     std::memset(g_block_end, 0, sizeof g_block_end);
     g_spdif_out = g_spdif_mode = g_spdif_media = 0;
     g_next_tick = 0;

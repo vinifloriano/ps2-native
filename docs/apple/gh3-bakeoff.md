@@ -65,13 +65,31 @@ Fix (`runtime/src/iop/sif.cpp`):
 
 Result: GH3 now loads through the Brazucas splash with its progress bar, finishes loading and starts the Activision logo film (`MOVIES\ATVI.PSS`): 2,035 GS primitives where before there was 1.
 
-### Next blocker: the intro film stays black
+### Fixed: the intro film stayed black (an SPU2 envelope read too early)
 
-- `ATVI.PSS` is opened and the IPU decodes it (IDEC/BDEC commands in the thousands, about 197k qwords out through DMA channel 3).
-- But nothing new is drawn: GIF path 3 carries only 2 image transfers in 3,600 frames, and the frames after 1,200 are black.
-- The EE main thread waits at `0x11ED80`, under `StartPreLoadedMovie` (`0x250898`) on its stack.
-- Each frame the EE also sends user command 3, which no IOP module registers. It is dropped as on the console (720 times), so it is probably a debug channel, but worth confirming.
-- Next: follow the decoded frames from IPU out (channel 3) to the GS upload, and find out what `0x11ED80` waits for (film audio through `MSTREAM`, or the IPU's end-of-picture).
+What the film player does:
+- The player (`0x2748a0` loop under `StartPreLoadedMovie`) only starts a film once its audio is preloaded: `0x2e9140` needs MSTREAM's status for stream 0 **and** stream 1 to be "ready".
+- The film's audio is one stereo SPU2-ADPCM track in the PSS (private stream `0xFF`, `SShd` type 0x10, 22,050 Hz, 2 channels, `0x2000` interleave). The EE demuxes it into two MSTREAM streams, left and right.
+- The ready flag is bit 31 of word 4 in the stream's record in MSTREAM's reply (EE `0x2e1bb0` copies it to `0x3EA6C0[stream]`). MSTREAM (`0x9b88` in the module) only lists active slots.
+- Until the film starts, the video decoder stops after two pictures (its queue is full), so the screen stays black.
+
+The bug:
+- Stream 1's slot was set up (its 8 KB preloaded to SPU2 RAM through IOP DMA channel 7) and keyed on.
+- 0.19 ms later MSTREAM's end check (`0x6ae8`) read the voice's ENVX with `sceSdGetParam(… | 0x500)`, got 0, decided the voice had ended, and stopped the stream (`0x11024` → `0x33b4`).
+- On the console the attack starts at the sample after KEY ON, so ENVX is already rising by then. The runtime renders the SPU2 in batches of 32 samples (0.67 ms) and only starts a keyed-on voice at the next batch, so ENVX still showed the old level, 0.
+- Found with `PS2_WATCH_IOP=63ca8:63cac` on slot 1's active and type bytes, plus a dump of the saved return addresses on the IOP stack.
+
+Fix (`runtime/src/iop/spu2.cpp`):
+- KEY ON records its time. An ENVX read before the next batch returns the attack level for the samples that have passed (`attack_so_far`); the batch then starts the voice as before.
+- Quick-save format unchanged.
+- New test `tests/spu2_envx_keyon.cpp` (`ninja ps2spu2envxtest`, in CI).
+- ps2autotests 54/55 and the unit tests still pass.
+
+Result: the Activision, RedOctane and Neversoft logo films play (1.45 million GIF path 3 image uploads where there were 2), followed by the opening film (`INTRO.PSS`).
+
+### Open
+- Each frame the EE sends user command 3, which no IOP module registers. It is dropped as on the console (720 times), so it is probably a debug channel, but worth confirming.
+- Not yet checked: the title screen and menus after the opening film, a song, film sound quality (the voices start up to one batch late), and the guitar.
 
 ## Candidate B: HenryKun55/celosia → PS2Recomp (025e264, built locally for comparison only, GPL-3.0)
 
