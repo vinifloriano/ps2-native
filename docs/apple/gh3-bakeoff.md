@@ -150,10 +150,22 @@ Result: the caution, memory card and save screens, the main menu (Career, Co-op,
 - The piston is a dark grey ramp palette (16-bit, alpha bit set), also the game's data.
 - Not checked against a console or PCSX2 yet.
 
-### Widescreen
+### Widescreen (`docs/apple/gh3-widescreen.pnach`)
 
-- GH3 reads the console's screen setting at boot (`GetOsdConfigParam`), but a boot with `--widescreen` draws the same picture as 4:3 (same inputs, frame 9400 of the song), so `--widescreen` would only stretch it.
-- PCSX2's patch collection has no patch for SLUS-21672. Widescreen needs a patch of the projection (and the HUD) written for this game.
+- GH3 reads the console's screen setting at boot (`GetOsdConfigParam`), but a boot with `--widescreen` draws the same picture as 4:3 (same inputs, frame 9400 of the song), so `--widescreen` alone only stretches it. PCSX2's patch collection has no patch for SLUS-21672, so this fork has its own (section `[Widescreen 16:9]`).
+- **3D, Hor+.** The camera code at 0x1BBB58 stores the horizontal view size at 0x372CF8. The patch multiplies it by 4/3 first, keeping the game's own ×0.8667 / ×1.1333 adjustment after it. The venue is wider (the drum kit and the posters at the sides come into view), and the band and the highway keep their shape.
+- **2D, kept 4:3 in the middle.** Screen elements are placed at `x_gs = (x + offset_x) × scale_x × 16 + 0x6C00`. The 2D transform (0x1BFCE8) now sets scale_x to 0.75 × the viewport's, inlining the one-load getter at 0x15E0C8 to make room. Every routine that places things with scale_x then adds 80 px (`0x6C00` → `0x7100`) so the middle stays put:
+  - sprites 0x1C04E0, the routine at 0x1C29C4, rectangles 0x1B2584 / 0x1B2594 / 0x1B3FA0 / 0x1B3FE8
+  - scale_x is also read as `lui 0x37` + `-0x343C`, not only through `$gp`
+  - 3D-to-2D positions (0x189CF0) subtract 1808 instead of 1728
+  - the boxes that do not use scale_x (0x1B5A5C, 0x1BFA3C, 0x2954CC, 0x2959B4) stay full width, like the big backgrounds
+- Checked from a boot with the patch (same inputs as the 4:3 run): caution, title, main menu, difficulty, setlist, loading, the song and the pause menu.
+  - Text, highlight bars and button bars line up. The fret targets line up with the 3D strings. The rock meter and star power gauge are round and square again.
+  - In a window at 2x with FSR: 16:9, 59.8 fps.
+- Build and app:
+  - `scripts/port.sh gh3ws <iso> --pnach docs/apple/gh3-widescreen.pnach --pnach-section "Widescreen 16:9" --native-only` (code patches are translated with the executable)
+  - `scripts/mac_app.sh gh3ws --title "Guitar Hero III Brazuca" --data gh3 --widescreen`. The app runs the patched executable and keeps the `gh3` player folder.
+- Not checked yet: the results screen, career and multiplayer screens (two players halve the viewport's x scale; the patch keeps that factor), and films (drawn full screen, so stretched).
 
 ### Open
 - Each frame the EE sends user command 3, which no IOP module registers. It is dropped as on the console, so it is probably a debug channel, but worth confirming.

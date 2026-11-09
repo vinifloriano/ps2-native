@@ -1,0 +1,58 @@
+gametitle=Guitar Hero III - Legends of Rock NTSC-U (SLUS-21672, CRC A46E2D44)
+
+// 16:9 for Guitar Hero III (the "Brazucas" disc, same executable as SLUS-21672). Written for this fork; PCSX2's patch
+// collection has none for this game. Build with:
+//   scripts/port.sh gh3ws <disc.iso> --pnach docs/apple/gh3-widescreen.pnach --pnach-section "Widescreen 16:9" --native-only
+// See docs/apple/gh3-bakeoff.md (Widescreen).
+
+[Widescreen 16:9]
+gsaspectratio=16:9
+author=ps2-native fork
+description=Wider 3D view (Hor+, the band and the highway keep their shape); the 2D HUD and menus drawn 4:3 in the middle.
+
+// 3D: the camera code at 0x1BBB58 stores the horizontal view size at 0x372CF8. It now multiplies it by 4/3 first
+// (16:9 over 4:3), keeping the game's own adjustment that follows (x0.8667 or x1.1333 for some cameras). The two NOPs
+// before it give the room.
+patch=1,EE,001BBB58,word,46150803
+patch=1,EE,001BBB5C,word,3C013FAA
+patch=1,EE,001BBB60,word,3421AAAB
+patch=1,EE,001BBB64,word,44811000
+patch=1,EE,001BBB68,word,46020842
+patch=1,EE,001BBB6C,word,3C02071F
+patch=1,EE,001BBB70,word,8C830040
+patch=1,EE,001BBB74,word,34424183
+patch=1,EE,001BBB78,word,3C010037
+patch=1,EE,001BBB7C,word,E4212CF8
+patch=1,EE,001BBB80,word,46000007
+patch=1,EE,001BBB84,word,1462000C
+patch=1,EE,001BBB88,word,E7802C8C
+patch=1,EE,001BBB8C,word,8F82C9C0
+patch=1,EE,001BBB90,word,3C013F5D
+patch=1,EE,001BBB94,word,10400003
+patch=1,EE,001BBB98,word,3421DDDE
+patch=1,EE,001BBBA8,word,46000802
+patch=1,EE,001BBBAC,word,3C010037
+patch=1,EE,001BBBB0,word,E4202CF8
+patch=1,EE,001BBBB4,word,00000000
+
+// 2D: screen elements are placed at x_gs = (x + offset_x) * scale_x * 16 + 0x6C00 (sprite code at 0x1C04E0). The
+// function at 0x1BFCE8 sets scale_x (gp-0x34AC) from the viewport. It now sets 0.75 x the viewport's x scale, and the
+// y scale (gp-0x34A8) straight from the viewport (the getter at 0x15E0C8, a single load, is inlined to make room):
+//   1BFD0C lui $1,0x3F40 / mtc1 $1,$f1 / mul.s $f1,$f1,$f0 / (swc1 $f1,scale_x) / lwc1 $f1,-0x61B4($gp) / nop
+patch=1,EE,001BFD0C,word,3C013F40
+patch=1,EE,001BFD10,word,44810800
+patch=1,EE,001BFD14,word,46000842
+patch=1,EE,001BFD1C,word,C7819E4C
+patch=1,EE,001BFD20,word,00000000
+// and the sprite origin moves 80 pixels right (0x6C00 -> 0x7100), so x' = 0.75 x + 80 keeps the middle of the screen
+patch=1,EE,001C04E0,word,24737100
+// the same for the other routines that place things with scale_x (it is also read as lui 0x37 / -0x343C): the one
+// that adds the origin at 0x1C29C4, the rectangle code at 0x1B2584/0x1B2594 (button bars, highlights) and 0x1B3FA0/
+// 0x1B3FE8. The ones at 0x1B5A5C, 0x1BFA3C, 0x2954CC and 0x2959B4 do not use scale_x (whole-screen boxes) and stay.
+patch=1,EE,001C29C4,word,26737100
+patch=1,EE,001B2584,word,24547100
+patch=1,EE,001B2594,word,24847100
+patch=1,EE,001B3FA0,word,24427100
+patch=1,EE,001B3FE8,word,24427100
+// 3D point -> 2D position (0x189CF0: (x_gs - 1728) / scale_x): subtract 1808 so the +80 above is undone there
+patch=1,EE,00189CF0,word,3C0144E2

@@ -11,7 +11,12 @@
 #                    instant and with no extra space on the same volume; otherwise a full copy)
 #   --keys FILE      a keys.ini for this game (docs/apple/gh3-keys.ini for Guitar Hero III): the player's folder starts with it,
 #                    and an existing keys.ini there is kept as keys.ini.bak and replaced
+#   --data NAME      the player's folder (default: <name>): an app made from another build of the same game, such as one with
+#                    a patch, keeps the same memory card, saves and keys
+#   --widescreen     start the game with a 16:9 picture (for a build made with a 16:9 patch section)
 #
+# A build that port.sh made with --pnach runs its patched executable: the app takes games/<name>/patched/ and the patch lists
+# (patches.txt, toggles.txt) along.
 # The app holds the runner, the SDL libraries it needs from Homebrew (so it keeps working after `brew upgrade`) and the disc.
 # What changes while playing (memory card, quick saves, logs, vector programs recorded for the next build) goes to
 # ~/Library/Application Support/ps2-native/<name>, never into the app. The app is signed ad hoc for this Mac only; it holds a
@@ -20,11 +25,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; }
 [ $# -ge 1 ] || { usage; exit 2; }
 case "$1" in -h|--help) usage; exit 0 ;; esac
 name="$1"; shift
-title="$name"; out="/Applications"; icon=""; disc=""; link_disc=0; keys=""
+title="$name"; out="/Applications"; icon=""; disc=""; link_disc=0; keys=""; data_name="$name"; widescreen=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --title) title="$2"; shift ;;
@@ -33,6 +38,8 @@ while [ $# -gt 0 ]; do
     --disc) disc="$2"; shift ;;
     --link-disc) link_disc=1 ;;
     --keys) keys="$2"; shift ;;
+    --data) data_name="$2"; shift ;;
+    --widescreen) widescreen=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
@@ -40,6 +47,7 @@ while [ $# -gt 0 ]; do
 done
 [ "$(uname -s)" = Darwin ] || { echo "mac_app.sh makes macOS apps: run it on a Mac" >&2; exit 1; }
 if ! [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$name" == .* ]]; then echo "game name '$name': letters, digits, . _ and - only" >&2; exit 2; fi
+if ! [[ "$data_name" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$data_name" == .* ]]; then echo "--data '$data_name': letters, digits, . _ and - only" >&2; exit 2; fi
 case "$title" in */*|.*|"") echo "title '$title': no / and not starting with a dot" >&2; exit 2 ;; esac
 
 runner="$ROOT/build/native-$name/ps2run"
@@ -104,9 +112,25 @@ fi
 # What the game folder of port.sh starts the player's folder with: the entry points the exploring runs found (the live translator
 # adds to them while playing).
 [ ! -f "$game/entries.txt" ] || cp "$game/entries.txt" "$contents/Resources/game/entries.txt"
+# A patched build (port.sh --pnach): its executable and the patch lists, passed to the runner by the launcher.
+run_args=""
+patched="$(ls "$game/patched" 2> /dev/null | head -n 1 || true)"
+if [ -n "$patched" ]; then
+  cp "$game/patched/$patched" "$contents/Resources/game/$patched"
+  run_args="\"\$res/game/$patched\""
+  echo "patched executable $patched"
+fi
+for list in patches toggles; do
+  if [ -f "$game/$list.txt" ]; then
+    cp "$game/$list.txt" "$contents/Resources/game/$list.txt"
+    run_args="$run_args --$list \"\$res/game/$list.txt\""
+    echo "with $list.txt"
+  fi
+done
+[ "$widescreen" = 0 ] || run_args="$run_args --widescreen"
 if [ -n "$keys" ]; then
   cp "$keys" "$contents/Resources/game/keys.ini"
-  data="$HOME/Library/Application Support/ps2-native/$name"
+  data="$HOME/Library/Application Support/ps2-native/$data_name"
   if [ -f "$data/keys.ini" ] && ! cmp -s "$keys" "$data/keys.ini"; then
     # an earlier backup is kept too (keys.ini.bak is the oldest: usually the player's own keys)
     backup="$data/keys.ini.bak"
@@ -124,12 +148,12 @@ cat > "$contents/MacOS/launch" << EOF
 # programs recorded for the next build; log.txt is the last run's output.
 here="\$(cd "\$(dirname "\$0")" && pwd)"
 res="\$here/../Resources"
-data="\$HOME/Library/Application Support/ps2-native/$name"
+data="\$HOME/Library/Application Support/ps2-native/$data_name"
 mkdir -p "\$data/vu1" "\$data/vu0"
 [ -f "\$data/entries.txt" ] || [ ! -f "\$res/game/entries.txt" ] || cp "\$res/game/entries.txt" "\$data/entries.txt"
 [ -f "\$data/keys.ini" ] || [ ! -f "\$res/game/keys.ini" ] || cp "\$res/game/keys.ini" "\$data/keys.ini"
 cd "\$data"
-exec "\$here/ps2run" --disc "\$res/disc.iso" --window --game-dir "\$data" --memcard "\$data/memcard.ps2" "\$@" > "\$data/log.txt" 2>&1
+exec "\$here/ps2run" $run_args --disc "\$res/disc.iso" --window --game-dir "\$data" --memcard "\$data/memcard.ps2" "\$@" > "\$data/log.txt" 2>&1
 EOF
 chmod 755 "$contents/MacOS/launch"
 
@@ -181,4 +205,4 @@ fi
 mv "$bundle" "$app"
 echo "== $app"
 echo "Open it from Finder or with: open \"$app\""
-echo "Its log and memory card: ~/Library/Application Support/ps2-native/$name"
+echo "Its log and memory card: ~/Library/Application Support/ps2-native/$data_name"

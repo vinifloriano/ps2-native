@@ -10,6 +10,7 @@
 > Picture look F2 now includes **FSR 1** (AMD's EASU + RCAS) to the window's size, 4K in full screen on a 4K display.
 > SPU2 voices are resampled with a windowed sinc (`PS2_SPU2_INTERP=linear` for the old straight line), and keys.ini
 > `audio_latency = <ms>` sets how much sound waits for the device (30 for Guitar Hero III instead of about 80).
+> Guitar Hero III in 16:9: `docs/apple/gh3-widescreen.pnach` (wider 3D view, HUD kept 4:3 in the middle).
 > No game data, disc images or generated code are in this repository. Bring your own disc.
 >
 > The upstream README follows.
