@@ -47,12 +47,21 @@ std::vector<std::uint8_t> module() {
     return elf;
 }
 
-// The EE sends a 0x70-byte packet with request id `opt` in the header, one transfer to the IOP's command buffer.
-std::uint32_t ee_send(std::uint32_t opt, std::uint32_t fill) {
+constexpr std::uint32_t kData = 0x00122000, kDataSize = 0x800, kIopData = 0x00030000;  // extra data, more than SIF1's FIFO
+
+// The EE sends a 0x70-byte packet with request id `opt` in the header to the IOP's command buffer. With `data`, 2 KiB of extra data
+// go ahead of it in the same DMA list (as ps2sdk's _SifSendCmd sends them): more than the 512-byte FIFO, so the transfer takes time.
+std::uint32_t ee_send(std::uint32_t opt, std::uint32_t fill, bool data = true) {
     for (std::uint32_t i = 0; i < kPacketSize; i += 4) ps2::st32(kPacket + i, fill + i);
-    ps2::st32(kPacket, kPacketSize); ps2::st32(kPacket + 4, 0); ps2::st32(kPacket + 8, kCid); ps2::st32(kPacket + 12, opt);
-    ps2::st32(kList, kPacket); ps2::st32(kList + 4, sif::get_reg(2)); ps2::st32(kList + 8, kPacketSize); ps2::st32(kList + 12, 0x44);
-    return sif::set_dma(kList, 1);
+    ps2::st32(kPacket, kPacketSize | (data ? kDataSize << 8 : 0)); ps2::st32(kPacket + 4, data ? kIopData : 0);
+    ps2::st32(kPacket + 8, kCid); ps2::st32(kPacket + 12, opt);
+    std::uint32_t at = kList;
+    if (data) {
+        ps2::st32(at, kData); ps2::st32(at + 4, kIopData); ps2::st32(at + 8, kDataSize); ps2::st32(at + 12, 0);
+        at += 16;
+    }
+    ps2::st32(at, kPacket); ps2::st32(at + 4, sif::get_reg(2)); ps2::st32(at + 8, kPacketSize); ps2::st32(at + 12, 0x44);
+    return sif::set_dma(kList, data ? 2 : 1);
 }
 
 void spend_ee_cycles(std::int32_t n) { ps2::g_cpu.budget -= n; }  // now() counts the budget the EE has used
@@ -95,6 +104,7 @@ int main() {
     check(calls == 1, "the handler runs once when the transfer is over");
     check(seen_opt == 5, "the handler sees the request id of the packet that was sent");
     check(seen_word == 0x55550040u, "the handler sees the packet as it was when the transfer started");
+    check(iop::ram32(kIopData) == ps2::ld32(kData), "the extra data is in IOP memory when the handler runs");
 
     // 3. Two packets back to back keep their order and each waits for its own transfer.
     ee_send(6, 0x66660000u);
@@ -108,6 +118,14 @@ int main() {
     spend_ee_cycles(static_cast<std::int32_t>(ps2::scheduled_at(sif::kEventSifCommand) - ps2::now()));
     sif::deliver_commands();
     check(calls == 3 && seen_opt == 7, "the second packet comes at the end of its own transfer");
+
+    // 4. A packet alone fits in SIF1's FIFO: the DMA is over as soon as it starts, so sceSifDmaStat says done at once (the EE then
+    //    reads its request id back before the IOP can answer, Guitar Hero III's file layer) and the packet is handed over right away.
+    const std::uint32_t small = ee_send(8, 0x88880000u, false);
+    check(sif::dma_stat(small) < 0, "sceSifDmaStat says done at once for a packet that fits in the FIFO");
+    check(ps2::scheduled_at(sif::kEventSifCommand) <= ps2::now(), "a packet that fits in the FIFO is due at once");
+    sif::deliver_commands();
+    check(calls == 4 && seen_opt == 8, "a packet that fits in the FIFO reaches the handler at once");
 
     std::printf("SIF user command timing: %d failed\n", failed);
     return failed ? 1 : 0;

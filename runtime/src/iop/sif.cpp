@@ -1341,7 +1341,13 @@ std::uint32_t set_dma(std::uint32_t transfers, std::uint32_t count) {
             release_iop_rpc_packet(dst);
         }
     }
-    g_ee_dma_done = std::max(g_ee_dma_done, now()) + 256u + bytes * 2u;
+    // When the EE's DMA is over (sceSifDmaStat, and when the IOP sees the command packets in it). The DMAC fills SIF1's FIFO, 32
+    // quadwords, at bus speed, which is over before the SifSetDma syscall has returned; what goes beyond the FIFO waits for the IOP
+    // to drain it, about two EE cycles a byte. A fixed 256 cycles on every transfer (as imported) kept a 112-byte request "going"
+    // for 480 cycles: Guitar Hero III polls sceSifDmaStat between calls into its stream library, which let the IOP answer the
+    // request before the EE had read its id back (EE 0x120a40), and its next read went out with file id -1 (docs/apple/gh3-bakeoff.md).
+    constexpr std::uint64_t kSifFifoBytes = 512;
+    g_ee_dma_done = std::max(g_ee_dma_done, now()) + (bytes > kSifFifoBytes ? (bytes - kSifFifoBytes) * 2u : 0u);
     if (!later.empty()) {
         for (PendingCommand &c : later) {
             c.due = g_ee_dma_done;
