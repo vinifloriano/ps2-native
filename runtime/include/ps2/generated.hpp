@@ -41,6 +41,9 @@ void register_modules(const ModuleInfo *modules, std::uint32_t count);
 void add_modules(const ModuleInfo *modules, std::uint32_t count);
 // True when some module of a code window is in place (its checked words are what the memory holds now) where pc is.
 bool window_module_in_place(std::uint32_t pc);
+// The game put new code in memory (FlushCache of the instruction cache): forget which modules were found in place, so the next call
+// into a code window checks all of a module's words again instead of one.
+void forget_window_instances();
 
 void dispatch(Cpu &c, std::uint32_t entry, std::uint32_t depth);
 void call(Cpu &c, std::uint32_t target, std::uint32_t depth);

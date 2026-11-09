@@ -25,7 +25,7 @@ The folder is bounded, because the build translates every image in it (a window
 that shares its memory with changing data gets a new name, the CRC, every time:
 Tekken 5 wrote 374 MB in a few runs). The same rules as runtime/src/ee_live.cpp:
 an image that differs from a saved one at the same address in at most 1/16 of its
-words is the same code with other data and is not saved again; at most 8 images
+words is the same code with other data and is not saved again; at most 16 images
 per address, 32 in all, 16 MiB together, the least recently used go first. Only
 names of the form <8 hex>_<8 hex>.bin are managed.
 """
@@ -36,7 +36,7 @@ import struct
 import sys
 
 UNIT = 0x4000
-PER_BASE, TOTAL, TOTAL_BYTES = 8, 32, 16 << 20
+PER_BASE, TOTAL, TOTAL_BYTES = 16, 32, 16 << 20
 NAME = re.compile(r'^([0-9A-Fa-f]{8})_[0-9A-Fa-f]{8}\.bin$')
 
 
@@ -48,10 +48,13 @@ def load_phdrs(elf):
 
 
 def windows(elf):
-    out = []
+    out, starts = [], set()
     for v in load_phdrs(elf):
         if v[0] != 1 or v[4] or not (v[6] & 1):  # no PT_LOAD, has contents, not executable
             continue
+        if v[2] in starts:                 # another overlay for the same window (GTA San Andreas: 8 at 0x88D880)
+            continue
+        starts.add(v[2])
         base = v[2] & ~(UNIT - 1)
         while base in [b for b, _ in out]:
             base += UNIT

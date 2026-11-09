@@ -94,8 +94,9 @@ std::vector<Snr2Module> read_overlays(const std::string &dir) {
         std::ifstream file(path.path(), std::ios::binary);
         o.bytes = std::vector<std::uint8_t>{std::istreambuf_iterator<char>(file), {}};
         if (o.bytes.size() < 0x400u || o.bytes.size() & 3u) continue;
-        o.size = static_cast<std::uint32_t>(o.bytes.size());
         o.base = static_cast<std::uint32_t>(std::stoul(base, nullptr, 16));
+        mask_overlay_leftovers(o.base, o.bytes);
+        o.size = static_cast<std::uint32_t>(o.bytes.size());
         o.code_begin = 0;
         o.code_end = o.size;
         o.name = stem;

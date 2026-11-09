@@ -59,6 +59,9 @@ HeadChecks entry_head_checks(const Snr2Module &o, const Program &program);
 inline constexpr std::uint32_t kWindowUnit = 0x4000;
 inline constexpr std::uint32_t kWindowCap = 0x40000;
 std::vector<std::uint32_t> code_windows(const std::vector<std::uint8_t> &elf);
+// Zeroes what is not overlay in a window image that holds an "MWo3" overlay (Grand Theft Auto: San Andreas's .NM files) and ends
+// the image with the overlay; other images are left as they are (eerecomp_gen.cpp).
+void mask_overlay_leftovers(std::uint32_t base, std::vector<std::uint8_t> &bytes);
 
 // Every segment that has contents in the file, code or data: {address, size in memory}. Memory the game loads code into does not overlap them.
 std::vector<std::pair<std::uint32_t, std::uint32_t>> file_segments(const std::vector<std::uint8_t> &elf);

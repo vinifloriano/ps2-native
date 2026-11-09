@@ -213,6 +213,12 @@ void add_modules_ranked(const ModuleInfo *modules, std::uint32_t count, int rank
 
 bool window_module_in_place(std::uint32_t pc) { return instance_for(pc) != nullptr; }
 
+// A module found in place is checked again with one of its words per call (in_place). Games that load overlays into one window
+// (Grand Theft Auto: San Andreas reads its eight .NM files to 0x88D880) swap modules that share words, such as their header: one
+// word can still match after the swap, and a call would run the old module's code (it unwound GTA SA's main to address 0). Every
+// such load ends with FlushCache of the instruction cache, which brings the full check back for the next call.
+void forget_window_instances() { g_instances.clear(); }
+
 bool window_covered(std::uint32_t base, std::uint32_t size) {
     // A module that holds the range, whatever base it begins at (windows are steps of 16 KiB in one area, and a window inside a
     // translated one holds the same code).

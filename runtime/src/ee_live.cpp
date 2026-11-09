@@ -230,11 +230,12 @@ std::vector<std::uint8_t> read_file(const fs::path &p) {
 //    for it (and is marked as just used), nothing is written, and the entry points go under the name of the one that is kept;
 //  - at most kOverlaysPerBase images per window address, kOverlaysTotal in all, kOverlayBytes together. Past a limit the images
 //    used least recently (by the time of the file) go: the folder keeps what the latest plays needed.
-// 8 per address is enough for a game that loads one image per area into the same window (Silent Hill 2: a handful of areas a
-// session), 32 in all and 16 MiB hold several windows at 256 KiB each, and the build analyses every image once: 32 stay quick.
+// 16 per address holds a game that loads one image per area into the same window (Silent Hill 2: a handful of areas a session;
+// Grand Theft Auto: San Andreas: its eight .NM overlays and their variants), 32 in all and 16 MiB hold several windows at 256 KiB
+// each, and the build analyses every image once: 32 stay quick.
 // scripts/windows.py (capture and trim) uses the same numbers and the same rule for a folder that is too full from before.
 // PS2_EE_LIVE_OVERLAYS=<total> lowers the total (a test of the limit).
-constexpr std::size_t kOverlaysPerBase = 8, kOverlaysTotal = 32;
+constexpr std::size_t kOverlaysPerBase = 16, kOverlaysTotal = 32;
 constexpr std::uint64_t kOverlayBytes = 16u << 20;
 
 struct SavedOverlay {

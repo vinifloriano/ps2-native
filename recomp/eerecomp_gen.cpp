@@ -47,12 +47,16 @@ std::vector<std::uint32_t> window_entries(const Image &image, const Program &pro
     return seeds;
 }
 
+// Zero words are left out: a zero is a NOP to the analysis, so the zeros after a module's end (its .bss, free memory) count as code,
+// and the game later writes data there. Grand Theft Auto: San Andreas's MPEG.NM ends at 0x89D7C0 in a window that reaches 0x8A0000;
+// its image never matched again once the game used those words. Swapping modules changes the real code words, which stay checked.
 std::vector<std::pair<std::uint32_t, std::uint32_t>> checks_for_window(const Snr2Module &o, const Program &program) {
     std::vector<std::pair<std::uint32_t, std::uint32_t>> checks;
     for (std::uint32_t at = 0; at + 4 <= o.size; at += 4) {
         if (!program.is_code(o.base + at)) continue;
         std::uint32_t word = 0;
         std::memcpy(&word, o.bytes.data() + at, 4);
+        if (word == 0) continue;
         checks.emplace_back(at, word);
     }
     return checks;
@@ -118,11 +122,17 @@ std::vector<std::uint32_t> code_windows(const std::vector<std::uint8_t> &elf) {
     };
     const std::uint32_t phoff = u32(28);
     const std::uint16_t phentsize = u16(42), phnum = u16(44);
+    // Segments that begin at the same address are alternatives for one window, not windows of their own: Grand Theft Auto: San
+    // Andreas has one per .NM overlay, all eight at 0x88D880. Moving each to the next 16 KiB made eight windows that each captured
+    // a slice of whichever overlay was loaded, more images than the folder keeps (scripts/windows.py does the same).
+    std::vector<std::uint32_t> starts;
     for (std::uint32_t i = 0; i < phnum; ++i) {
         const std::size_t at = static_cast<std::size_t>(phoff) + static_cast<std::size_t>(i) * phentsize;
         if (at + 32 > elf.size()) break;
         const std::uint32_t type = u32(at), vaddr = u32(at + 8), filesz = u32(at + 16), flags = u32(at + 24);
         if (type != 1 || filesz || !(flags & 1)) continue;  // no PT_LOAD, has contents, not executable
+        if (std::find(starts.begin(), starts.end(), vaddr) != starts.end()) continue;
+        starts.push_back(vaddr);
         std::uint32_t base = vaddr & ~(kWindowUnit - 1);
         while (std::find(out.begin(), out.end(), base) != out.end()) base += kWindowUnit;
         out.push_back(base);
@@ -241,10 +251,35 @@ std::pair<std::uint32_t, std::uint32_t> StaticProgram::code_range() const {
     return first < last ? std::pair<std::uint32_t, std::uint32_t>{first, last} : std::pair<std::uint32_t, std::uint32_t>{0, 0};
 }
 
+// An overlay with a Metrowerks header ("MWo3": magic, number, its own address, size, .bss size; Grand Theft Auto: San Andreas's
+// .NM files) in a window image: the header is found in the first 16 KiB where its address word names the place it sits. Only the
+// overlay is the image's code: the words before it belong to the program, and the ones past its size and .bss are left over from
+// a bigger overlay loaded before (the program calls the other overlays at fixed addresses, so those calls would seed the analysis
+// into the left-overs and make them check words that differ from run to run). The words before are zeroed (zero words are never
+// checked) and the image ends with the overlay. Images without such a header are left as they are.
+void mask_overlay_leftovers(std::uint32_t base, std::vector<std::uint8_t> &bytes) {
+    const auto word = [&](std::size_t at) {
+        std::uint32_t v = 0;
+        if (at + 4 <= bytes.size()) std::memcpy(&v, bytes.data() + at, 4);
+        return v;
+    };
+    for (std::size_t at = 0; at + 0x20 <= bytes.size() && at < kWindowUnit; at += 16) {
+        if (word(at) != 0x336F574Du || word(at + 8) != base + at) continue;
+        const std::uint64_t end = (at + static_cast<std::uint64_t>(word(at + 12)) + word(at + 16) + 3u) & ~std::uint64_t{3};
+        if (end <= at + 0x20 || end > bytes.size()) return;
+        std::fill(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(at), std::uint8_t{0});
+        bytes.resize(static_cast<std::size_t>(end));
+        if (bytes.size() < 0x400u) bytes.resize(0x400u, 0);
+        return;
+    }
+}
+
 LiveResult generate_live(const LiveRequest &request, const std::filesystem::path &out_dir) {
     LiveResult result;
     try {
-        const std::uint32_t size = static_cast<std::uint32_t>(request.image.size());
+        std::vector<std::uint8_t> bytes = request.image;
+        mask_overlay_leftovers(request.base, bytes);
+        const std::uint32_t size = static_cast<std::uint32_t>(bytes.size());
         if (size < 0x400u || (size & 3u)) {
             result.error = "the window image is too small or not a whole number of words";
             return result;
@@ -254,7 +289,7 @@ LiveResult generate_live(const LiveRequest &request, const std::filesystem::path
         // The text range is the whole window: with {0, size}, which is right for a module that sits at address 0, the search for function
         // starts stopped at the last place the entries reached, and a window's other functions were each found by a pause of their own.
         const bool code_only = request.text_end > request.text_begin;
-        const Image image = Image::raw(request.base, request.image, code_only ? std::pair{request.text_begin, request.text_end} : std::pair{request.base, request.base + size});
+        const Image image = Image::raw(request.base, bytes, code_only ? std::pair{request.text_begin, request.text_end} : std::pair{request.base, request.base + size});
         // The first translation of an image looks through all of it (and takes every place after a return as a function start, so that the
         // short functions that only pointer tables name are there too: each missed one used to cost a pause of its own). A later one for an
         // image that is already in place translates just what the missed entry reaches, which is a fraction of the compile time.
@@ -281,7 +316,7 @@ LiveResult generate_live(const LiveRequest &request, const std::filesystem::path
             return result;
         }
         Snr2Module o;
-        o.bytes = request.image;
+        o.bytes = bytes;
         o.size = size;
         o.base = request.base;
         o.name = request.name;
