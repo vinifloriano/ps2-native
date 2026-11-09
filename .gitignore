@@ -58,6 +58,8 @@ __pycache__/
 *.webp
 *.mp4
 *.webm
+# except the few chosen for the documentation (README, docs/games): what works, at a small size
+!docs/images/*.jpg
 *.avi
 *.mkv
 
