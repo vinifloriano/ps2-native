@@ -247,6 +247,13 @@ if(NOT EMSCRIPTEN)
     if(WIN32)
         target_link_libraries(ps2spu2envxtest PRIVATE synchronization)
     endif()
+    # SPU2 voices resampled with a windowed sinc (Guitar Hero III's 33075 Hz songs), no game needed: ninja ps2spu2interptest
+    add_executable(ps2spu2interptest EXCLUDE_FROM_ALL tests/spu2_interp.cpp)
+    target_include_directories(ps2spu2interptest PRIVATE runtime/src)
+    target_link_libraries(ps2spu2interptest PRIVATE ps2runtime)
+    if(WIN32)
+        target_link_libraries(ps2spu2interptest PRIVATE synchronization)
+    endif()
     # an EE command packet for a guest IOP handler arrives when its SIF DMA is over (Guitar Hero III), no game needed: ninja ps2sifusercmdtest
     add_executable(ps2sifusercmdtest EXCLUDE_FROM_ALL tests/sif_user_cmd_timing.cpp)
     target_include_directories(ps2sifusercmdtest PRIVATE runtime/src)

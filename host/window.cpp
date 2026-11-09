@@ -1804,6 +1804,22 @@ bool open_window(bool fullscreen) {
     const std::string stretch = ps2::os::env("PS2_AUDIO_STRETCH"), stretch_max = ps2::os::env("PS2_AUDIO_STRETCH_MAX");
     config.stretch = stretch != "0";
     if (const double limit = std::atof(stretch_max.c_str()); limit >= 1.5 && limit <= 20.0) config.max_ratio = limit;
+    // keys.ini audio_latency (or PS2_AUDIO_LATENCY, which wins): how much sound waits for the device. The stretcher needs about 56 ms
+    // waiting to keep the plain speed between two frames, so below 60 it is off; the device takes smaller blocks too.
+    int latency = g_keys.audio_latency;
+    if (const int env = std::atoi(ps2::os::env("PS2_AUDIO_LATENCY").c_str()); env >= 20 && env <= 200) latency = env;
+    if (latency > 0) {
+        config.pace_ms = latency;
+        config.target_ms = std::max(15.0, latency - 20.0);
+        config.restart_ms = std::min(config.restart_ms, latency * 0.6);
+        if (latency < 60) {
+            config.stretch = false;
+            config.target_ms = latency;
+            want.samples = latency <= 30 ? 256 : 512;
+        }
+        std::fprintf(stderr, "[audio] about %d ms of sound waits for the device (audio_latency), blocks of %d samples%s\n", latency, want.samples,
+                     config.stretch ? "" : "; no stretching below 60 ms");
+    }
     static ps2sound::SoundPipe pipe(config);
     g_pipe = &pipe;
     want.callback = audio_callback;

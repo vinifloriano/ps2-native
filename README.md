@@ -8,6 +8,8 @@
 > To get a double-click app in /Applications: `bash scripts/mac_app.sh <name> --title "My Game" [--icon icon.png] [--keys keys.ini]`
 > (saves and logs go to `~/Library/Application Support/ps2-native/<name>`). Guitar Hero III's keys: `docs/apple/gh3-keys.ini`.
 > Picture look F2 now includes **FSR 1** (AMD's EASU + RCAS) to the window's size, 4K in full screen on a 4K display.
+> SPU2 voices are resampled with a windowed sinc (`PS2_SPU2_INTERP=linear` for the old straight line), and keys.ini
+> `audio_latency = <ms>` sets how much sound waits for the device (30 for Guitar Hero III instead of about 80).
 > No game data, disc images or generated code are in this repository. Bring your own disc.
 >
 > The upstream README follows.

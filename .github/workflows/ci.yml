@@ -77,7 +77,7 @@ jobs:
           ROOT="$PWD"
           . scripts/cxx.sh
           cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release "${cxx_flags[@]}"
-          ninja -C build/ci ps2runtime vujit_dump ps2thbasetest ps2sifcmdtest ps2sifusercmdtest ps2spu2envxtest ps2path3windowtest ps2savetest ps2discinputtest ps2iopboundstest
+          ninja -C build/ci ps2runtime vujit_dump ps2thbasetest ps2sifcmdtest ps2sifusercmdtest ps2spu2envxtest ps2spu2interptest ps2path3windowtest ps2savetest ps2discinputtest ps2iopboundstest
           ccache -s | head -n 5 || true
           echo "CXX_BIN=$cxx_bin" >> "$GITHUB_ENV"
 
@@ -87,6 +87,7 @@ jobs:
           build/ci/ps2sifcmdtest
           build/ci/ps2sifusercmdtest
           build/ci/ps2spu2envxtest
+          build/ci/ps2spu2interptest
           build/ci/ps2path3windowtest
           build/ci/ps2savetest "$RUNNER_TEMP/savetest"
           build/ci/ps2discinputtest

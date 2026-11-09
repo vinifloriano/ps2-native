@@ -9,6 +9,7 @@
 #include "ps2/state.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -98,6 +99,66 @@ std::uint16_t g_spdif_out = 0, g_spdif_mode = 0, g_spdif_media = 0;
 std::function<void(const std::int16_t *, std::size_t)> g_sink;
 std::uint64_t g_next_tick = 0;
 bool g_reverb_off = false;  // PS2_SPU2_REVERB=0 leaves the reverb out (to compare with the sound from before it existed)
+
+// The voices' resampling (spu2.hpp). The sinc's weights: kPhases steps between two samples, kInterpTaps weights each, in 1/32768ths,
+// each row adding up to exactly 32768 (a steady level passes unchanged). Kaiser window (beta 8, about 80 dB down), cut off at 0.95 of
+// the voice's own top frequency: flat to about 13 kHz for a 33 kHz stream, where the straight line is already 2.6 dB down at 10 kHz
+// and leaves the music's mirror images at 17 dB.
+bool g_sinc_on = true;
+constexpr int kTapsBefore = kInterpTaps / 2 - 1;  // at[-15] .. at[16]
+constexpr int kPhases = 1024;
+std::int32_t g_sinc[kPhases][kInterpTaps];
+// The kInterpTaps / 2 samples before a voice's buffer[0] (the end of the block that slid out). Not part of a state (Voice is stored
+// as it is): after a load they are silence, which is at most a faint click as the sound goes on.
+std::int16_t g_history[2][24][kInterpTaps / 2];
+
+std::int16_t *history(const Voice &v) {
+    const int c = &v >= g_cores[1].voices ? 1 : 0;
+    return g_history[c][&v - g_cores[c].voices];
+}
+
+double bessel_i0(double x) {
+    double sum = 1.0, term = 1.0;
+    for (int k = 1; k < 40; ++k) {
+        term *= (x / (2.0 * k)) * (x / (2.0 * k));
+        sum += term;
+    }
+    return sum;
+}
+
+void build_sinc() {
+    constexpr double kPi = 3.14159265358979323846, kBeta = 8.0, kCutoff = 0.95;
+    for (int p = 0; p < kPhases; ++p) {
+        const double x = static_cast<double>(p) / kPhases;
+        double weight[kInterpTaps], sum = 0.0;
+        for (int t = 0; t < kInterpTaps; ++t) {
+            const double d = (t - kTapsBefore) - x;  // from the point wanted to this sample, in samples
+            const double r = d / (kInterpTaps / 2.0);
+            const double window = r > -1.0 && r < 1.0 ? bessel_i0(kBeta * std::sqrt(1.0 - r * r)) / bessel_i0(kBeta) : 0.0;
+            const double s = d == 0.0 ? 1.0 : std::sin(kPi * kCutoff * d) / (kPi * kCutoff * d);
+            weight[t] = s * window;
+            sum += weight[t];
+        }
+        std::int32_t total = 0, biggest = 0;
+        for (int t = 0; t < kInterpTaps; ++t) {
+            g_sinc[p][t] = static_cast<std::int32_t>(std::lround(weight[t] / sum * 32768.0));
+            total += g_sinc[p][t];
+            if (std::abs(g_sinc[p][t]) > std::abs(g_sinc[p][biggest])) biggest = t;
+        }
+        g_sinc[p][biggest] += 32768 - total;  // the rounding left over goes on the biggest weight
+    }
+}
+
+std::int32_t sinc_at(const std::int16_t *at, std::uint32_t frac) {
+    static const bool built = (build_sinc(), true);
+    (void)built;
+    const std::int32_t *w = g_sinc[(frac & 0xFFFu) >> 2];
+    const std::int16_t *s = at - kTapsBefore;
+    std::int64_t sum = 0;
+    for (int t = 0; t < kInterpTaps; ++t) sum += static_cast<std::int64_t>(w[t]) * s[t];
+    // the sinc can ring a little past full scale on a hard edge; the chip's sample is 16 bits
+    return std::clamp<std::int32_t>(static_cast<std::int32_t>((sum + (1 << 14)) >> 15), -32768, 32767);
+}
 bool g_tick_pending = false;
 std::uint64_t g_first_tick = 0, g_last_tick = 0;
 
@@ -199,6 +260,7 @@ void key_on(Voice &v) {
     v.next = v.ssa;
     v.s1 = v.s2 = 0;
     v.position = 0;
+    std::memset(history(v), 0, sizeof g_history[0][0]);
     v.phase = kAttack;
     v.env = Envelope{};
     decode_block(v, v.buffer);
@@ -269,13 +331,24 @@ void render_voice(Voice &v, unsigned voice, const Routing &route, std::int32_t (
     const bool sweep_l = v.voll & 0x8000u, sweep_r = v.volr & 0x8000u;
     const std::int32_t fixed_l = static_cast<std::int16_t>(v.voll << 1), fixed_r = static_cast<std::int16_t>(v.volr << 1);
     std::uint32_t position = v.position;
+    // the sinc reads 15 samples before the current one: the end of the block that slid out, then the voice's two blocks
+    constexpr int kKept = kInterpTaps / 2;
+    std::int16_t *const kept = history(v);
+    std::int16_t window[kKept + 56];
+    const auto refill = [&] {
+        std::memcpy(window, kept, sizeof(std::int16_t) * kKept);
+        std::memcpy(window + kKept, v.buffer, sizeof v.buffer);
+    };
+    refill();
     for (unsigned n = 0; n < kBatch; ++n) {
         if (v.phase == kOff) break;
         const std::uint32_t index = position >> 12, frac = position & 0xFFFu;
-        const std::int32_t sample = (v.buffer[index] * static_cast<std::int32_t>(0x1000 - frac) + v.buffer[index + 1] * static_cast<std::int32_t>(frac)) >> 12;
+        const std::int32_t sample = g_sinc_on ? sinc_at(window + kKept + index, frac)
+                                              : (v.buffer[index] * static_cast<std::int32_t>(0x1000 - frac) + v.buffer[index + 1] * static_cast<std::int32_t>(frac)) >> 12;
         position += step;
         while ((position >> 12) >= 28) {
             position -= 28u << 12;
+            std::memcpy(kept, v.buffer + 28 - kKept, sizeof(std::int16_t) * kKept);
             std::memmove(v.buffer, v.buffer + 28, 28 * sizeof(std::int16_t));
             if (block_end(v)[0]) {
                 v.end = true;
@@ -289,6 +362,7 @@ void render_voice(Voice &v, unsigned voice, const Routing &route, std::int32_t (
             v.position = position;
             check_irq(v.block[0], 8);
             decode_block(v, v.buffer + 28);
+            refill();
         }
         update_envelope(v);
         const std::int32_t out = sample * v.env.level >> 15;
@@ -738,9 +812,11 @@ void reset() {
     for (Core &k : g_cores) k = Core{};
     std::memset(g_key_on_at, 0, sizeof g_key_on_at);
     std::memset(g_block_end, 0, sizeof g_block_end);
+    std::memset(g_history, 0, sizeof g_history);
     g_spdif_out = g_spdif_mode = g_spdif_media = 0;
     g_next_tick = 0;
     g_reverb_off = os::env("PS2_SPU2_REVERB") == "0";
+    g_sinc_on = os::env("PS2_SPU2_INTERP") != "linear";
     g_tick_pending = false;
     g_first_tick = g_last_tick = 0;
     const std::string chip = os::env("PS2_DUMP_AUDIO"), out = os::env("PS2_AUDIO_DUMP");
@@ -820,6 +896,11 @@ void dma_stop(int core) {
 }
 
 void set_sink(std::function<void(const std::int16_t *, std::size_t)> sink) { g_sink = std::move(sink); }
+
+std::int32_t interpolate(const std::int16_t *at, std::uint32_t frac, bool sinc) {
+    if (sinc) return sinc_at(at, frac);
+    return (at[0] * static_cast<std::int32_t>(0x1000 - frac) + at[1] * static_cast<std::int32_t>(frac)) >> 12;
+}
 
 void dump_voices() {
     for (int c = 0; c < 2; ++c) {

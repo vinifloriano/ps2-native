@@ -131,6 +131,29 @@ Result: the caution, memory card and save screens, the main menu (Career, Co-op,
 - **EASU** (`blit.wgsl`, `fs_easu`) enlarges the PS2 picture (at 1x to 3x, `scale`) to its size in the window, into an RGBA8 texture. **RCAS** (`fsr_rcas.wgsl`) sharpens that into the window. `PS2_FSR_SHARPNESS` sets the RCAS stops (0.25 by default).
 - In full screen on a 4K display the 4:3 picture is drawn at 2880×2160. Checked in a 1920×1440 window: 59.9 fps at 2x resolution on the M5 Pro.
 - FSR 4 is not possible here: it is a machine-learning upscaler that AMD ships only for its RDNA 4 GPUs through DirectX 12, with no Metal version. FSR 2 and 3 need motion vectors, which a PS2 renderer does not have.
+- 3x does not keep 60 fps on the M5 Pro (18.0 ms per frame on average in a song, sound running dry); 2x does (16.7 ms, none). `gh3-keys.ini` stays at 2x.
+
+### Sound quality and delay
+
+- **Resampling.** The song's eight stream voices play at pitch 0x0B06: they are 33075 Hz, raised to the chip's 48000 Hz by the voice interpolation (the crowd voices are about 11 kHz). It was a straight line between two samples. It is now a 32-tap Kaiser-windowed sinc (`spu2.cpp`, `PS2_SPU2_INTERP=linear` brings the line back).
+  - Test without a disc: `ps2spu2interptest`. A 33075 Hz sine read between its samples is off by 0.05% of its amplitude at 8 kHz and 0.07% at 12 kHz, against 14% and 29% for the straight line.
+  - In the song (12 s from a saved state, chip output): 8 to 12 kHz is 2.5 dB louder and 12 to 15 kHz 4.5 dB, the treble the line was dulling. The mirror images above the streams' 16.5 kHz top drop from -32 dB to -61 dB (16.5 to 20 kHz) and -79 dB (above 20 kHz). It runs in the same time.
+  - The console itself uses a 4-tap Gaussian filter, which is softer than both. This aims for the clean sound, not the console's.
+- **Delay.** About 80 ms of sound waited for the device, plus its 1024-sample block (21 ms). A rhythm game feels that. `audio_latency = <ms>` in keys.ini (or `PS2_AUDIO_LATENCY`) sets it. Below 60 ms the time stretcher is off (it needs about 56 ms waiting to keep the plain speed) and the device takes 256- or 512-sample blocks.
+  - At 30 ms with 2x and FSR, 25 s of the song in a window: the sound ran dry only at the state load itself (0.02 s), never in the song. `gh3-keys.ini` sets 30.
+
+### The sustain glow on every fret is green
+
+- Holding a sustain lifts the fret's cap over a grey piston sprite and draws an additive glow sprite over it. On the red and yellow frets the glow is green.
+- That is the game's own data, drawn the same by the software and the GPU renderers. The glow sprite (TEX0 `tbp 3395`, `cbp 33D5`, 8-bit, 16-bit palette) is one 4×4 atlas of green sparks, and the game uploads the same texture and palette for every fret.
+  - It is the only such texture record in RAM (checksum 0x22C32BF2). The vertex color is 0x80808080 for every fret, and nothing writes the palette while a sustain is held.
+- The piston is a dark grey ramp palette (16-bit, alpha bit set), also the game's data.
+- Not checked against a console or PCSX2 yet.
+
+### Widescreen
+
+- GH3 reads the console's screen setting at boot (`GetOsdConfigParam`), but a boot with `--widescreen` draws the same picture as 4:3 (same inputs, frame 9400 of the song), so `--widescreen` would only stretch it.
+- PCSX2's patch collection has no patch for SLUS-21672. Widescreen needs a patch of the projection (and the HUD) written for this game.
 
 ### Open
 - Each frame the EE sends user command 3, which no IOP module registers. It is dropped as on the console, so it is probably a debug channel, but worth confirming.

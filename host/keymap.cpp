@@ -279,6 +279,13 @@ void parse(const std::string &text, Config &config, std::vector<std::string> &pr
             else bad("scale is 1, 2 or 3, ignored");
             continue;
         }
+        if (name == "audiolatency") {
+            char *tail = nullptr;
+            const long v = std::strtol(value.c_str(), &tail, 10);
+            if (value.empty() || *tail || v < 20 || v > 200) bad("audio_latency is a number of milliseconds from 20 to 200, ignored");
+            else config.audio_latency = static_cast<int>(v);
+            continue;
+        }
         if (name == "mousespeed") {
             char *tail = nullptr;
             const double v = std::strtod(value.c_str(), &tail);
@@ -371,7 +378,11 @@ std::string default_file_text() {
         "look = " + std::string(look_word(kDefaultLook)) + "\n"
         "\n# The inner resolution: 1, 2 or 3 times the console's (sharper, and more work for the graphics chip). Used when the game\n"
         "# starts; the quick menu (F1) writes it here. The environment variable PS2_SCALE, when it is set, wins over this line.\n"
-        "# scale = 1\n";
+        "# scale = 1\n"
+        "\n# How much of the game's sound waits for the sound device, in milliseconds (20 to 200; about 80 without this line). Less is\n"
+        "# heard sooner (rhythm games); below 60 the sound is no longer slowed down to cover a frame the computer was late with, so a\n"
+        "# slow moment can click. Used when the game starts.\n"
+        "# audio_latency = 80\n";
     return t;
 }
 

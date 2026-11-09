@@ -37,6 +37,7 @@ struct Config {
     double mouse_deadzone = 0; // 0 to 0.9: how far the stick jumps out as soon as the mouse moves
     int look = -1;             // the picture look (F2) written in keys.ini, -1 when the file has no 'look' line
     int scale = 0;             // the inner resolution (1 to 3 times the console's) used at the next start, 0 when the file has no 'scale' line
+    int audio_latency = 0;     // milliseconds of sound kept waiting for the device (20 to 200), 0 when the file has no 'audio_latency' line
 };
 
 // The picture looks the F2 key goes through. Looks 0 to 5 are also the video option bits (ps2/video.hpp): bit 0 smooth edges, bit 1 soft,
