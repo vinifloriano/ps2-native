@@ -9,6 +9,8 @@
 #   --disc FILE      the disc image (default: games/<name>/disc.iso, the one port.sh used)
 #   --link-disc      point at the disc image instead of putting a copy in the app (a copy is an APFS clone when it can be:
 #                    instant and with no extra space on the same volume; otherwise a full copy)
+#   --keys FILE      a keys.ini for this game (docs/apple/gh3-keys.ini for Guitar Hero III): the player's folder starts with it,
+#                    and an existing keys.ini there is kept as keys.ini.bak and replaced
 #
 # The app holds the runner, the SDL libraries it needs from Homebrew (so it keeps working after `brew upgrade`) and the disc.
 # What changes while playing (memory card, quick saves, logs, vector programs recorded for the next build) goes to
@@ -22,7 +24,7 @@ usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 [ $# -ge 1 ] || { usage; exit 2; }
 case "$1" in -h|--help) usage; exit 0 ;; esac
 name="$1"; shift
-title="$name"; out="/Applications"; icon=""; disc=""; link_disc=0
+title="$name"; out="/Applications"; icon=""; disc=""; link_disc=0; keys=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --title) title="$2"; shift ;;
@@ -30,6 +32,7 @@ while [ $# -gt 0 ]; do
     --icon) icon="$2"; shift ;;
     --disc) disc="$2"; shift ;;
     --link-disc) link_disc=1 ;;
+    --keys) keys="$2"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
@@ -47,6 +50,7 @@ game="$ROOT/games/$name"
 disc="$(cd "$(dirname "$disc")" && pwd)/$(basename "$disc")"
 [ -L "$disc" ] && disc="$(python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$disc")"  # port.sh links the image it was given
 [ -d "$out" ] || { echo "no folder $out" >&2; exit 1; }
+[ -z "$keys" ] || [ -f "$keys" ] || { echo "no keys file $keys" >&2; exit 1; }
 
 app="$out/$title.app"
 # Built beside the destination, so the final move is a rename on the same volume (the disc's clone stays a clone).
@@ -100,6 +104,14 @@ fi
 # What the game folder of port.sh starts the player's folder with: the entry points the exploring runs found (the live translator
 # adds to them while playing).
 [ ! -f "$game/entries.txt" ] || cp "$game/entries.txt" "$contents/Resources/game/entries.txt"
+if [ -n "$keys" ]; then
+  cp "$keys" "$contents/Resources/game/keys.ini"
+  data="$HOME/Library/Application Support/ps2-native/$name"
+  if [ -f "$data/keys.ini" ] && ! cmp -s "$keys" "$data/keys.ini"; then
+    mv "$data/keys.ini" "$data/keys.ini.bak"
+    echo "kept the old keys as $data/keys.ini.bak"
+  fi
+fi
 
 echo "== launcher"
 cat > "$contents/MacOS/launch" << EOF
@@ -111,6 +123,7 @@ res="\$here/../Resources"
 data="\$HOME/Library/Application Support/ps2-native/$name"
 mkdir -p "\$data/vu1" "\$data/vu0"
 [ -f "\$data/entries.txt" ] || [ ! -f "\$res/game/entries.txt" ] || cp "\$res/game/entries.txt" "\$data/entries.txt"
+[ -f "\$data/keys.ini" ] || [ ! -f "\$res/game/keys.ini" ] || cp "\$res/game/keys.ini" "\$data/keys.ini"
 cd "\$data"
 exec "\$here/ps2run" --disc "\$res/disc.iso" --window --game-dir "\$data" --memcard "\$data/memcard.ps2" "\$@" > "\$data/log.txt" 2>&1
 EOF

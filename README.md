@@ -5,8 +5,9 @@
 > (PS2, SLUS-216.72)**. Fixes stay generic so they help every game and can go back upstream.
 > The plan: [docs/apple/plan.md](docs/apple/plan.md). Where it stands: [docs/apple/gh3-bakeoff.md](docs/apple/gh3-bakeoff.md).
 > On macOS: `brew install cmake ninja pkg-config sdl2 ffmpeg ccache bash`, then `bash scripts/port.sh <name> <disc.iso> --native-only`.
-> To get a double-click app in /Applications: `bash scripts/mac_app.sh <name> --title "My Game" [--icon icon.png]`
-> (saves and logs go to `~/Library/Application Support/ps2-native/<name>`).
+> To get a double-click app in /Applications: `bash scripts/mac_app.sh <name> --title "My Game" [--icon icon.png] [--keys keys.ini]`
+> (saves and logs go to `~/Library/Application Support/ps2-native/<name>`). Guitar Hero III's keys: `docs/apple/gh3-keys.ini`.
+> Picture look F2 now includes **FSR 1** (AMD's EASU + RCAS) to the window's size, 4K in full screen on a 4K display.
 > No game data, disc images or generated code are in this repository. Bring your own disc.
 >
 > The upstream README follows.

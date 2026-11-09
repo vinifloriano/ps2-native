@@ -27,6 +27,7 @@
 
 extern const char kGsShader[];
 extern const char kBlitShader[];
+extern const char kFsrRcasShader[];
 
 namespace ps2::gs {
 void swizzle_tables(std::vector<std::uint32_t> &out);
@@ -59,6 +60,19 @@ WGPUPresentMode g_present_mode = WGPUPresentMode_Fifo;
 std::uint32_t g_frame_latency = 0;  // pictures the swap chain may keep in flight; 0 = the library's default (2)
 std::uint32_t g_surface_width = 0, g_surface_height = 0;
 WGPURenderPipeline g_blit = nullptr;
+// The FSR 1 look (option bit 8): AMD's FSR 1 in two passes. EASU (blit.wgsl, fs_easu) draws the picture at its size in the window into
+// `texture`, with the blit's own bindings; RCAS (fsr_rcas.wgsl) sharpens that into the window. The texture follows the picture's size.
+// PS2_FSR_SHARPNESS=<stops> sets RCAS's sharpness the way AMD's FsrRcasCon takes it (0 the most, each stop halves it; 0.25 here).
+struct Fsr {
+    WGPURenderPipeline easu = nullptr, rcas = nullptr;
+    WGPUBindGroupLayout layout = nullptr;
+    WGPUBuffer params = nullptr;
+    WGPUTexture texture = nullptr;
+    WGPUTextureView view = nullptr;
+    WGPUBindGroup group = nullptr;
+    std::uint32_t width = 0, height = 0;
+} g_fsr;
+constexpr std::uint32_t kFsrOption = 8;
 WGPUBindGroup g_blit_group = nullptr;
 WGPUBuffer g_blit_params = nullptr;
 // The overlay (overlay.hpp): the quick menu's panel, drawn over the game's picture in the present pass with alpha blending. Its pixels
@@ -1098,6 +1112,7 @@ void queue_pre(const PreOp &op) {
 }
 
 void submit(WGPUTextureView present_view);
+bool fsr_target(std::uint32_t width, std::uint32_t height);
 
 std::uint64_t queue_upload(const std::uint8_t *bytes, std::size_t size, std::uint32_t lead_bits) {
     Image &im = g_image;
@@ -1386,6 +1401,27 @@ void submit(WGPUTextureView present_view = nullptr) {
         wgpuCommandEncoderCopyBufferToBuffer(enc, g_query_resolve, 0, g_query_read, 0, 16);
     }
     if (present_view) {
+        const float pw = static_cast<float>(g_surface_width), ph = static_cast<float>(g_surface_height);
+        const float picture_aspect = g_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
+        const float pvw = std::min(pw, ph * picture_aspect), pvh = pvw / picture_aspect;
+        // the FSR look: EASU into the picture of the window's size first (the blit's uniform says that size: present, present_again)
+        const bool fsr = (ps2::video_options() & kFsrOption) && fsr_target(static_cast<std::uint32_t>(pvw), static_cast<std::uint32_t>(pvh));
+        if (fsr) {
+            WGPURenderPassColorAttachment upscale = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
+            upscale.view = g_fsr.view;
+            upscale.loadOp = WGPULoadOp_Clear;
+            upscale.storeOp = WGPUStoreOp_Store;
+            upscale.clearValue = WGPUColor{0.0, 0.0, 0.0, 1.0};
+            WGPURenderPassDescriptor ud = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
+            ud.colorAttachmentCount = 1;
+            ud.colorAttachments = &upscale;
+            WGPURenderPassEncoder up = wgpuCommandEncoderBeginRenderPass(enc, &ud);
+            wgpuRenderPassEncoderSetPipeline(up, g_fsr.easu);
+            wgpuRenderPassEncoderSetBindGroup(up, 0, g_blit_group, 0, nullptr);
+            wgpuRenderPassEncoderDraw(up, 3, 1, 0, 0);
+            wgpuRenderPassEncoderEnd(up);
+            wgpuRenderPassEncoderRelease(up);
+        }
         WGPURenderPassColorAttachment color = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
         color.view = present_view;
         color.loadOp = WGPULoadOp_Clear;
@@ -1399,8 +1435,8 @@ void submit(WGPUTextureView present_view = nullptr) {
         const float aspect = g_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
         const float vw = std::min(w, h * aspect), vh = vw / aspect;
         wgpuRenderPassEncoderSetViewport(rp, (w - vw) * 0.5f, (h - vh) * 0.5f, vw, vh, 0.0f, 1.0f);
-        wgpuRenderPassEncoderSetPipeline(rp, g_blit);
-        wgpuRenderPassEncoderSetBindGroup(rp, 0, g_blit_group, 0, nullptr);
+        wgpuRenderPassEncoderSetPipeline(rp, fsr ? g_fsr.rcas : g_blit);
+        wgpuRenderPassEncoderSetBindGroup(rp, 0, fsr ? g_fsr.group : g_blit_group, 0, nullptr);
         wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
         if (g_overlay.on && g_overlay.group && g_surface_width && g_surface_height) {
             // the panel's own rectangle, cut to the window (a window made smaller than the panel shows its top left part)
@@ -2825,6 +2861,94 @@ const char *present_mode_name(WGPUPresentMode mode) {
     }
 }
 
+
+namespace {
+
+// FSR 1's second pass (RCAS): the picture EASU drew, and its size and sharpness, into the window.
+void make_fsr_rcas_pipeline() {
+    WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+    source.code = view(kFsrRcasShader);
+    WGPUShaderModuleDescriptor md = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    md.nextInChain = &source.chain;
+    WGPUShaderModule module = wgpuDeviceCreateShaderModule(g_device, &md);
+    WGPUBindGroupLayoutEntry le[2] = {WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT, WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT};
+    le[0].binding = 0;
+    le[0].visibility = WGPUShaderStage_Fragment;
+    le[0].texture.sampleType = WGPUTextureSampleType_Float;
+    le[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+    le[1].binding = 1;
+    le[1].visibility = WGPUShaderStage_Fragment;
+    le[1].buffer.type = WGPUBufferBindingType_Uniform;
+    WGPUBindGroupLayoutDescriptor ld = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
+    ld.entryCount = 2;
+    ld.entries = le;
+    g_fsr.layout = wgpuDeviceCreateBindGroupLayout(g_device, &ld);
+    WGPUPipelineLayoutDescriptor pld = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
+    pld.bindGroupLayoutCount = 1;
+    pld.bindGroupLayouts = &g_fsr.layout;
+    WGPUPipelineLayout pipeline_layout = wgpuDeviceCreatePipelineLayout(g_device, &pld);
+    WGPUColorTargetState color = WGPU_COLOR_TARGET_STATE_INIT;
+    color.format = g_surface_format;
+    WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
+    fragment.module = module;
+    fragment.entryPoint = view("fs");
+    fragment.targetCount = 1;
+    fragment.targets = &color;
+    WGPURenderPipelineDescriptor rd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
+    rd.layout = pipeline_layout;
+    rd.vertex.module = module;
+    rd.vertex.entryPoint = view("vs");
+    rd.fragment = &fragment;
+    g_fsr.rcas = wgpuDeviceCreateRenderPipeline(g_device, &rd);
+    wgpuShaderModuleRelease(module);
+    wgpuPipelineLayoutRelease(pipeline_layout);
+    g_fsr.params = make_buffer(16, WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
+}
+
+// The picture EASU draws into, at the picture's size in the window (made again when that changes), and RCAS's bindings for it.
+bool fsr_target(std::uint32_t width, std::uint32_t height) {
+    if (!g_fsr.easu || !g_fsr.rcas || !g_fsr.params || !width || !height) return false;
+    if (width == g_fsr.width && height == g_fsr.height && g_fsr.group) return true;
+    if (g_fsr.group) wgpuBindGroupRelease(g_fsr.group);
+    if (g_fsr.view) wgpuTextureViewRelease(g_fsr.view);
+    if (g_fsr.texture) wgpuTextureRelease(g_fsr.texture);
+    g_fsr.group = nullptr;
+    g_fsr.view = nullptr;
+    WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+    td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+    td.dimension = WGPUTextureDimension_2D;
+    td.size = WGPUExtent3D{width, height, 1};
+    td.format = WGPUTextureFormat_RGBA8Unorm;
+    g_fsr.texture = wgpuDeviceCreateTexture(g_device, &td);
+    if (!g_fsr.texture) return false;
+    g_fsr.view = wgpuTextureCreateView(g_fsr.texture, nullptr);
+    WGPUBindGroupEntry be[2] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
+    be[0].binding = 0;
+    be[0].textureView = g_fsr.view;
+    be[1].binding = 1;
+    be[1].buffer = g_fsr.params;
+    be[1].size = 16;
+    WGPUBindGroupDescriptor bd = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bd.layout = g_fsr.layout;
+    bd.entryCount = 2;
+    bd.entries = be;
+    g_fsr.group = wgpuDeviceCreateBindGroup(g_device, &bd);
+    static const float stops = [] {
+        const std::string v = os::env("PS2_FSR_SHARPNESS");
+        return v.empty() ? 0.25f : std::clamp(static_cast<float>(std::atof(v.c_str())), 0.0f, 4.0f);
+    }();
+    const float sharpness = std::exp2(-stops);
+    std::uint32_t params[4] = {width, height, 0, 0};
+    std::memcpy(&params[2], &sharpness, 4);
+    wgpuQueueWriteBuffer(g_queue, g_fsr.params, 0, params, sizeof params);
+    g_fsr.width = width;
+    g_fsr.height = height;
+    std::fprintf(stderr, "[gpu] FSR 1: the picture is enlarged to %ux%u (EASU), then sharpened (RCAS, %.2f stops)\n", width, height, stops);
+    return g_fsr.group != nullptr;
+}
+
+}  // namespace
+
 bool attach_surface(const SurfaceTarget &target) {
     if (g_mode != Mode::primary || !g_device) return false;
     WGPUSurfaceDescriptor sd = WGPU_SURFACE_DESCRIPTOR_INIT;
@@ -2931,8 +3055,18 @@ bool attach_surface(const SurfaceTarget &target) {
     rd.vertex.entryPoint = view("vs");
     rd.fragment = &fragment;
     g_blit = wgpuDeviceCreateRenderPipeline(g_device, &rd);
+    // FSR 1's first pass: the same module and bindings, another fragment entry, drawn into an RGBA8 picture instead of the window
+    WGPUColorTargetState fsr_color = WGPU_COLOR_TARGET_STATE_INIT;
+    fsr_color.format = WGPUTextureFormat_RGBA8Unorm;
+    WGPUFragmentState easu_fragment = fragment;
+    easu_fragment.entryPoint = view("fs_easu");
+    easu_fragment.targets = &fsr_color;
+    WGPURenderPipelineDescriptor easu = rd;
+    easu.fragment = &easu_fragment;
+    g_fsr.easu = wgpuDeviceCreateRenderPipeline(g_device, &easu);
     wgpuShaderModuleRelease(module);
     wgpuPipelineLayoutRelease(pipeline_layout);
+    make_fsr_rcas_pipeline();
     g_blit_params = make_buffer(32, WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst);
     WGPUBindGroupEntry be[2] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
     be[0].binding = 0;

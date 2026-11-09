@@ -149,8 +149,12 @@ if(EMSCRIPTEN OR EXISTS "${PS2_WGPU_DIR}/lib/libwgpu_native.a")
     add_custom_command(OUTPUT "${PS2_BLIT_WGSL}"
         COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}/runtime/src/gs/gpu/blit.wgsl -DOUT=${PS2_BLIT_WGSL} -DNAME=kBlitShader -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
         DEPENDS runtime/src/gs/gpu/blit.wgsl cmake/embed.cmake)
+    set(PS2_FSR_RCAS_WGSL "${CMAKE_BINARY_DIR}/fsr_rcas_wgsl.cpp")
+    add_custom_command(OUTPUT "${PS2_FSR_RCAS_WGSL}"
+        COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}/runtime/src/gs/gpu/fsr_rcas.wgsl -DOUT=${PS2_FSR_RCAS_WGSL} -DNAME=kFsrRcasShader -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
+        DEPENDS runtime/src/gs/gpu/fsr_rcas.wgsl cmake/embed.cmake)
     if(NOT PS2_PREBUILT)
-        target_sources(ps2runtime PRIVATE runtime/src/gs/gpu/gpu.cpp "${PS2_GS_WGSL}" "${PS2_BLIT_WGSL}"
+        target_sources(ps2runtime PRIVATE runtime/src/gs/gpu/gpu.cpp "${PS2_GS_WGSL}" "${PS2_BLIT_WGSL}" "${PS2_FSR_RCAS_WGSL}"
             )
     endif()
     target_compile_definitions(ps2runtime ${PS2_API} PS2_GPU)

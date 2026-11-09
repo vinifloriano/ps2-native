@@ -119,13 +119,18 @@ bool lookup(const std::string &text, int &input) {
 const char *action_name(int action) { return kInfo[action].name; }
 
 const char *look_name(int look) {
-    static const char *const names[kLookCount] = {"Crisp", "Crisp + smooth edges", "Soft", "Soft + smooth edges", "Sharp", "Sharp + smooth edges"};
+    static const char *const names[kLookCount] = {"Crisp", "Crisp + smooth edges", "Soft", "Soft + smooth edges", "Sharp", "Sharp + smooth edges", "FSR 1 (AMD)"};
     return names[look < 0 || look >= kLookCount ? 0 : look];
 }
 
 const char *look_word(int look) {
-    static const char *const words[kLookCount] = {"crisp", "crisp_edges", "soft", "soft_edges", "sharp", "sharp_edges"};
+    static const char *const words[kLookCount] = {"crisp", "crisp_edges", "soft", "soft_edges", "sharp", "sharp_edges", "fsr"};
     return words[look < 0 || look >= kLookCount ? 0 : look];
+}
+
+std::uint32_t look_options(int look) {
+    if (look == 6) return 8u;  // FSR 1: option bit 3 (gpu.cpp, kFsrOption)
+    return static_cast<std::uint32_t>(look < 0 || look >= kLookCount ? kDefaultLook : look);
 }
 
 namespace {
@@ -264,7 +269,7 @@ void parse(const std::string &text, Config &config, std::vector<std::string> &pr
             int found = -1;
             for (int i = 0; i < kLookCount; ++i)
                 if (v == squash(look_word(i)) || v == std::to_string(i)) found = i;
-            if (found < 0) bad("look is sharp edges, sharp, crisp, crisp edges, soft or soft edges, ignored");
+            if (found < 0) bad("look is sharp edges, sharp, crisp, crisp edges, soft, soft edges or fsr, ignored");
             else config.look = found;
             continue;
         }
@@ -394,7 +399,7 @@ std::string card_text(const Config &c) {
     if (!c.inputs[Menu].empty()) t += "; also " + list(c, Menu);
     t += "\nOn a controller: hold Select, then press Start (or press the Guide button)\n";
     t += "F5 quick save   F8 quick load   F9 something is wrong   F11 full screen\n";
-    t += "F2 picture look, now: " + std::string(look_name(c.look < 0 ? kDefaultLook : c.look)) + " (sharp + smooth edges, sharp, crisp, crisp + smooth edges, soft, soft + smooth edges)\n";
+    t += "F2 picture look, now: " + std::string(look_name(c.look < 0 ? kDefaultLook : c.look)) + " (sharp + smooth edges, sharp, crisp, crisp + smooth edges, soft, soft + smooth edges, FSR 1)\n";
     t += "On some laptops the F keys need the Fn key held down: Fn + F1 opens the quick menu. The buttons below work without Fn.\n";
     if (!c.inputs[Help].empty()) t += "This card at once: " + list(c, Help) + "\n";
     return t;

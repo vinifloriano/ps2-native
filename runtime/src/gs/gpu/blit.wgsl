@@ -184,6 +184,128 @@ fn edge_aa(uv: vec2<f32>, center: vec3<f32>) -> vec3<f32> {
     return center + (select(b, a, lb < low || lb > high) - plain);
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// FSR 1 look (bit 3 of the options): AMD FidelityFX Super Resolution 1.0, the first of its two passes, EASU (edge adaptive spatial
+// upsampling), drawn into a picture of the window's size; fsr_rcas.wgsl then sharpens that picture into the window. Ported from the
+// 32-bit FsrEasuF of AMD's ffx_fsr1.h (FidelityFX-FSR 1.0.2, MIT license, Copyright (c) 2021 Advanced Micro Devices, Inc.; the notice
+// is in docs/apple/fsr1-license.txt). The texture gathers of the original become reads of the 12 source pixels from the scratch
+// buffer (scene_texel, so the two fields of an interlaced picture still blend), and AMD's approximate reciprocals exact ones.
+
+// 1/x for the non-negative values EASU divides by. The original's bit-trick reciprocal of 0 is large but finite, so that 0/0 gives 0
+// (a flat neighbourhood): kept that way here.
+fn fsr_rcp(x: f32) -> f32 { return 1.0 / max(x, 1.0e-20); }
+
+// "Luma times 2, in 2 FMA": the original's cheapest luma.
+fn fsr_luma2(c: vec3<f32>) -> f32 { return c.b * 0.5 + (c.r * 0.5 + c.g); }
+
+// FsrEasuSetF: the edge direction (xy) and length (z) of one "+" of five lumas, a above, b c d across, e below, with bilinear weight w.
+fn easu_set(w: f32, lA: f32, lB: f32, lC: f32, lD: f32, lE: f32) -> vec3<f32> {
+    let dc = lD - lC;
+    let cb = lC - lB;
+    let dir_x = lD - lB;
+    var len_x = clamp(abs(dir_x) * fsr_rcp(max(abs(dc), abs(cb))), 0.0, 1.0);
+    len_x *= len_x;
+    let ec = lE - lC;
+    let ca = lC - lA;
+    let dir_y = lE - lA;
+    var len_y = clamp(abs(dir_y) * fsr_rcp(max(abs(ec), abs(ca))), 0.0, 1.0);
+    len_y *= len_y;
+    return vec3<f32>(dir_x * w, dir_y * w, (len_x + len_y) * w);
+}
+
+// FsrEasuTapF: one tap of the kernel (an approximation of Lanczos 2 without sin or sqrt), turned along the edge and stretched across
+// it; returns the weighted colour and the weight.
+fn easu_tap(off: vec2<f32>, dir: vec2<f32>, len: vec2<f32>, lob: f32, clp: f32, c: vec3<f32>) -> vec4<f32> {
+    var v = vec2<f32>(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x);
+    v *= len;
+    let d2 = min(v.x * v.x + v.y * v.y, clp);
+    var w_b = 2.0 / 5.0 * d2 - 1.0;
+    var w_a = lob * d2 - 1.0;
+    w_b *= w_b;
+    w_a *= w_a;
+    w_b = 25.0 / 16.0 * w_b - (25.0 / 16.0 - 1.0);
+    let w = w_b * w_a;
+    return vec4<f32>(c * w, w);
+}
+
+@fragment
+fn fs_easu(in: VertexOut) -> @location(0) vec4<f32> {
+    // the output pixel's position in the source picture: FsrEasuCon's con0 (input size / output size, and half of it less 0.5)
+    let scale = vec2<f32>(f32(blit.width), f32(blit.height)) / vec2<f32>(f32(blit.out_width), f32(blit.out_height));
+    var pp = floor(in.position.xy) * scale + (0.5 * scale - 0.5);
+    let fp = floor(pp);
+    pp -= fp;
+    let x = i32(fp.x);
+    let y = i32(fp.y);
+    //    b c
+    //  e f g h
+    //  i j k l
+    //    n o
+    let b = scene_texel(x + 0, y - 1);
+    let c = scene_texel(x + 1, y - 1);
+    let e = scene_texel(x - 1, y + 0);
+    let f = scene_texel(x + 0, y + 0);
+    let g = scene_texel(x + 1, y + 0);
+    let h = scene_texel(x + 2, y + 0);
+    let i = scene_texel(x - 1, y + 1);
+    let j = scene_texel(x + 0, y + 1);
+    let k = scene_texel(x + 1, y + 1);
+    let l = scene_texel(x + 2, y + 1);
+    let n = scene_texel(x + 0, y + 2);
+    let o = scene_texel(x + 1, y + 2);
+    let bL = fsr_luma2(b);
+    let cL = fsr_luma2(c);
+    let eL = fsr_luma2(e);
+    let fL = fsr_luma2(f);
+    let gL = fsr_luma2(g);
+    let hL = fsr_luma2(h);
+    let iL = fsr_luma2(i);
+    let jL = fsr_luma2(j);
+    let kL = fsr_luma2(k);
+    let lL = fsr_luma2(l);
+    let nL = fsr_luma2(n);
+    let oL = fsr_luma2(o);
+    // direction and length, bilinearly from the four "+" around f, g, j, k
+    let acc = easu_set((1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL)
+            + easu_set(pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL)
+            + easu_set((1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL)
+            + easu_set(pp.x * pp.y, gL, jL, kL, lL, oL);
+    var dir = acc.xy;
+    var len = acc.z;
+    // normalise the direction (none: horizontal), and shape the length
+    let dir2 = dir * dir;
+    let dir_len2 = dir2.x + dir2.y;
+    if (dir_len2 < 1.0 / 32768.0) {
+        dir = vec2<f32>(1.0, dir.y);
+    } else {
+        dir *= inverseSqrt(dir_len2);
+    }
+    len = len * 0.5;
+    len *= len;
+    // stretch the kernel from 1.0 (horizontal or vertical) to sqrt(2) (diagonal), along the edge and across it
+    let stretch = (dir.x * dir.x + dir.y * dir.y) * fsr_rcp(max(abs(dir.x), abs(dir.y)));
+    let len2 = vec2<f32>(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    let lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+    let clp = fsr_rcp(lob);
+    // dering: clamp to the four nearest pixels
+    let min4 = min(min(f, g), min(j, k));
+    let max4 = max(max(f, g), max(j, k));
+    var a = easu_tap(vec2<f32>(0.0, -1.0) - pp, dir, len2, lob, clp, b);
+    a += easu_tap(vec2<f32>(1.0, -1.0) - pp, dir, len2, lob, clp, c);
+    a += easu_tap(vec2<f32>(-1.0, 1.0) - pp, dir, len2, lob, clp, i);
+    a += easu_tap(vec2<f32>(0.0, 1.0) - pp, dir, len2, lob, clp, j);
+    a += easu_tap(vec2<f32>(0.0, 0.0) - pp, dir, len2, lob, clp, f);
+    a += easu_tap(vec2<f32>(-1.0, 0.0) - pp, dir, len2, lob, clp, e);
+    a += easu_tap(vec2<f32>(1.0, 1.0) - pp, dir, len2, lob, clp, k);
+    a += easu_tap(vec2<f32>(2.0, 1.0) - pp, dir, len2, lob, clp, l);
+    a += easu_tap(vec2<f32>(2.0, 0.0) - pp, dir, len2, lob, clp, h);
+    a += easu_tap(vec2<f32>(1.0, 0.0) - pp, dir, len2, lob, clp, g);
+    a += easu_tap(vec2<f32>(1.0, 2.0) - pp, dir, len2, lob, clp, o);
+    a += easu_tap(vec2<f32>(0.0, 2.0) - pp, dir, len2, lob, clp, n);
+    let pix = min(max4, max(min4, a.rgb / select(a.w, 1.0e-20, abs(a.w) < 1.0e-20)));
+    return vec4<f32>(clamp(pix, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     var c: vec3<f32>;

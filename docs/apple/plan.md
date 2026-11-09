@@ -207,8 +207,10 @@ Done on 2026-11-08 (details in [gh3-bakeoff.md](gh3-bakeoff.md)):
 7. ~~Black intro film~~: MSTREAM stopped the film's second audio voice because ENVX read 0 right after KEY ON. ENVX now follows the attack from the KEY ON ([gh3-bakeoff.md](gh3-bakeoff.md)). The logo films and the opening film play.
 
 8. ~~Menus without text~~: VIF1 now waits at MSKPATH3 windows for channel 2, so textures reach the GS in order with the draws ([gh3-bakeoff.md](gh3-bakeoff.md)). The caution, save, title and main menus render.
+9. ~~Difficulty select did nothing~~: an EE SIF DMA that fits in the FIFO is now done at once. A song plays (the highway, notes and sound). The frets are mapped for keyboard and controller (`gh3-keys.ini`).
+10. ~~Upscaling~~: an FSR 1 look (EASU + RCAS) to the window's size, 4K in full screen on a 4K display ([gh3-bakeoff.md](gh3-bakeoff.md)).
 
 Next:
-1. Play a song: Quickplay, the highway, note timing against the audio, and the guitar.
+1. Play whole songs by hand: note timing against the audio, the results screen, Career, and a USB guitar (whammy, tilt for star power).
 2. Record PCSX2 (Rosetta) reference captures of boot, menu and the start of one song, to diff against the SIF traffic.
 3. Feed the harvested names into the translator's symbol output and the debugger.

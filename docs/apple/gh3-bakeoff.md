@@ -107,10 +107,35 @@ Fix (`runtime/src/vif.cpp`, `runtime/src/gs/gif.cpp`, `runtime/src/dmac.cpp`):
 
 Result: the caution, memory card and save screens, the main menu (Career, Co-op, Quickplay, Multiplayer, Training, Options) and the "Press any button to rock" title render with their text, frames and button prompts. Checked with and without the vector thread.
 
+### Fixed: choosing a difficulty did nothing (the request-id race again, from the SIF DMA's length)
+
+- Quickplay → SELECT DIFFICULTY took up/down but not select. The open that follows (request `0x509`) was answered with fd 1, then the read (`0x50A`) went out with fd `0xFFFFFFFF` and FILEIO parked it.
+- The EE's send loop polls `sceSifDmaStat` and calls into the stream library (`0x2ea460`) between polls.
+- The runtime said every EE SIF DMA was busy for `256 + 2·bytes` cycles: 480 for a 112-byte request. That is long enough for the IOP to take the command and answer, and for the answer's handler to clear the slot, before the EE read its id back (watched with `PS2_WATCH=0x415188,0x780` plus `--trace-syscalls`).
+- On the console the DMAC fills SIF1's 32-quadword FIFO at bus speed, which is over before the `SifSetDma` syscall returns, so the first poll says done.
+- Fix (`runtime/src/iop/sif.cpp`): what fits in the FIFO (512 bytes) is done at once; only what goes beyond it is paced, at two EE cycles a byte as before.
+- `tests/sif_user_cmd_timing.cpp` now sends 2 KiB of extra data ahead of the packet to keep the "delivered at the end of the transfer" cases, and adds a FIFO-sized case.
+- ps2autotests 54/55 and the unit tests pass, and the whole boot was replayed again.
+
+### A song plays
+
+- Quickplay → Easy → setlist (the Brazucas songs: *1406*, *A Sua Maneira*, *Admirável Chip Novo*, *Ana Júlia*) → *1406*.
+- It goes through the loading screen and the venue intro ("As made famous by Mamonas Assassinas") into gameplay: the highway, the fret targets, the rock and star power meters, the band and the crowd, with the notes scrolling down.
+- The song's sound reaches the SPU2: `PS2_DUMP_AUDIO=<file>` records it, and it gets louder once the song starts.
+- **Frets with a normal controller** (pressed one at a time on a green note from a saved state): L2 green (hits the note), L1 red, R1 yellow, R2 blue, Cross orange; strum on the D-pad.
+- `docs/apple/gh3-keys.ini` puts them on A S D F G (or 1-5) with the arrows (or Enter) to strum, Space for star power and Esc to pause. It also sets the FSR look at 2x resolution. `scripts/mac_app.sh --keys` installs it.
+
+### FSR 1 picture look (`look = fsr`, F2)
+
+- AMD's FidelityFX Super Resolution 1.0, ported to WGSL from `ffx_fsr1.h` (MIT; the notice is in `fsr1-license.txt`).
+- **EASU** (`blit.wgsl`, `fs_easu`) enlarges the PS2 picture (at 1x to 3x, `scale`) to its size in the window, into an RGBA8 texture. **RCAS** (`fsr_rcas.wgsl`) sharpens that into the window. `PS2_FSR_SHARPNESS` sets the RCAS stops (0.25 by default).
+- In full screen on a 4K display the 4:3 picture is drawn at 2880×2160. Checked in a 1920×1440 window: 59.9 fps at 2x resolution on the M5 Pro.
+- FSR 4 is not possible here: it is a machine-learning upscaler that AMD ships only for its RDNA 4 GPUs through DirectX 12, with no Metal version. FSR 2 and 3 need motion vectors, which a PS2 renderer does not have.
+
 ### Open
 - Each frame the EE sends user command 3, which no IOP module registers. It is dropped as on the console, so it is probably a debug channel, but worth confirming.
 - System SIF commands (RPC) still reach the IOP at once (see the SIF fix above).
-- Not yet checked: a song, film sound quality (the voices start up to one batch late) and the guitar.
+- Not yet checked: playing a whole song by hand (note timing against the audio, by ear), the end-of-song screen, film sound quality (the voices start up to one batch late), a USB guitar, whammy and tilt.
 - The window title still says "ps2-native-recomp".
 
 ## Candidate B: HenryKun55/celosia → PS2Recomp (025e264, built locally for comparison only, GPL-3.0)

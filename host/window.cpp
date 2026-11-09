@@ -120,7 +120,7 @@ Uint32 g_wheel_up_until = 0, g_wheel_down_until = 0;
 int g_last_dx = 0, g_last_dy = -1;  // the last direction the walk keys gave, for a roll without one
 
 // The picture look (F2): how the picture is enlarged and smoothed for the window (display only, the game and the saved pictures do not
-// change). The choice sits in keys.ini ('look = ...'); PS2_LOOK=0..5 or a look word overrides it for a run and is not written.
+// change). The choice sits in keys.ini ('look = ...'); PS2_LOOK=0..6 or a look word overrides it for a run and is not written.
 int g_look = keymap::kDefaultLook;
 bool g_look_forced = false;
 
@@ -510,7 +510,7 @@ void load_keys() {
     g_keys = config;
     if (!g_look_forced && config.look >= 0) g_look = config.look;
     g_keys.look = g_look;
-    ps2::set_video_options(static_cast<std::uint32_t>(g_look));
+    ps2::set_video_options(keymap::look_options(g_look));
     remember_keys_time();
     std::fprintf(stderr, "[keys] %s: %s%zu problem%s; mouse stick %s\n", g_keys_path.c_str(), have ? "read, " : "defaults, ", problems.size(),
                  problems.size() == 1 ? "" : "s", g_keys.mouse_stick == 0 ? "off" : g_keys.mouse_stick == 1 ? "left" : "right");
@@ -857,7 +857,7 @@ void rewrite_keys_file(const std::function<std::string(const std::string &)> &ch
 void cycle_look(int step = 1) {
     g_look = (g_look + step + keymap::kLookCount) % keymap::kLookCount;
     g_keys.look = g_look;
-    ps2::set_video_options(static_cast<std::uint32_t>(g_look));
+    ps2::set_video_options(keymap::look_options(g_look));
     g_notice_text = std::string("Picture look (F2): ") + keymap::look_name(g_look);
     g_notice_until = SDL_GetTicks() + 4000;
     refresh_title();

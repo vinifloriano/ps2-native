@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // The keyboard and mouse layout of a window run (docs/keys.md): which key or mouse button works which button of the console's
 // controller, the key file the player can edit (keys.ini), and the key card (the quick menu's Keys entry) made from what is in force.
 
@@ -37,11 +39,14 @@ struct Config {
     int scale = 0;             // the inner resolution (1 to 3 times the console's) used at the next start, 0 when the file has no 'scale' line
 };
 
-// The picture looks the F2 key goes through. The number is also the video option bits (ps2/video.hpp): bit 0 smooth edges, bit 1 soft, bit 2 sharp (look 4: cubic enlargement + light sharpening; look 5 = sharp + smooth edges).
-constexpr int kLookCount = 6;
+// The picture looks the F2 key goes through. Looks 0 to 5 are also the video option bits (ps2/video.hpp): bit 0 smooth edges, bit 1 soft,
+// bit 2 sharp (look 4: cubic enlargement + light sharpening; look 5 = sharp + smooth edges). Look 6 is AMD's FSR 1 (EASU enlargement to the
+// window's size, then RCAS sharpening), option bit 3: look_options gives the bits of a look.
+constexpr int kLookCount = 7;
 constexpr int kDefaultLook = 5;
 const char *look_name(int look);           // "Soft + smooth edges", for the title and the key card
 const char *look_word(int look);           // the word written in keys.ini
+std::uint32_t look_options(int look);      // the video option bits of a look (ps2::set_video_options)
 // keys.ini text with its 'look' line set to `look` (other lines untouched; the line is added at the end when missing)
 std::string with_look(const std::string &file_text, int look);
 // the same for the 'scale' line (the quick menu's resolution, used when the game starts the next time)
