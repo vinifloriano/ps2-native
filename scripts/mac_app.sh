@@ -108,8 +108,12 @@ if [ -n "$keys" ]; then
   cp "$keys" "$contents/Resources/game/keys.ini"
   data="$HOME/Library/Application Support/ps2-native/$name"
   if [ -f "$data/keys.ini" ] && ! cmp -s "$keys" "$data/keys.ini"; then
-    mv "$data/keys.ini" "$data/keys.ini.bak"
-    echo "kept the old keys as $data/keys.ini.bak"
+    # an earlier backup is kept too (keys.ini.bak is the oldest: usually the player's own keys)
+    backup="$data/keys.ini.bak"
+    n=2
+    while [ -e "$backup" ]; do backup="$data/keys.ini.bak$n"; n=$((n + 1)); done
+    mv "$data/keys.ini" "$backup"
+    echo "kept the old keys as $backup"
   fi
 fi
 
